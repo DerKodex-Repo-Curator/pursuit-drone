@@ -133,7 +133,8 @@ def main() -> int:
     a1.plot(ep, [r["train_loss"] for r in h], lw=1.8, color=C["train"], label="train")
     a1.plot(ep, [r["val_loss"] for r in h], lw=1.8, color=C["val"], label="validation")
     a1.set_ylabel("cross-entropy loss")
-    a1.legend(loc="upper right")
+    a1.legend(loc="lower right", bbox_to_anchor=(1.0, 1.0), ncol=2,
+              frameon=False, fontsize=8, borderaxespad=0.2)
     d = H["dataset"]; m = H["model"]; t = H["training"]
     a1.set_title(
         f"Face embedding trained from scratch on {d['images']:,} real LFW "
@@ -144,7 +145,8 @@ def main() -> int:
     a2.plot(ep, [r["train_acc"] for r in h], lw=1.8, color=C["train"], label="train")
     a2.plot(ep, [r["val_acc"] for r in h], lw=1.8, color=C["val"], label="validation")
     a2.set_xlabel("epoch"); a2.set_ylabel(f"identity accuracy\n({d['train_identities']}-way)")
-    a2.legend(loc="upper left")
+    a2.legend(loc="lower right", bbox_to_anchor=(1.0, 1.0), ncol=2,
+              frameon=False, fontsize=8, borderaxespad=0.2)
 
     # The honest annotation: validation went WORSE before it got better.
     vl = [r["val_loss"] for r in h]
@@ -194,7 +196,8 @@ def main() -> int:
     b1.plot([0, 1], [0, 1], lw=0.8, ls=":", color="#999999")
     b1.set_xlabel("false accept rate"); b1.set_ylabel("true accept rate")
     b1.set_title("Verification ROC, identical image pairs", loc="left")
-    b1.legend(fontsize=8.5, loc="lower right")
+    b1.legend(fontsize=8, loc="lower right", bbox_to_anchor=(1.0, 1.0),
+              ncol=1, frameon=False, borderaxespad=0.2)
 
     # size vs accuracy
     labels = ["mine\n(trained here)", "ArcFace\n(pretrained)"]

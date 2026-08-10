@@ -42,6 +42,19 @@ plt.rcParams.update({
 })
 
 
+def leg(ax, ncol=2):
+    """Put the legend on the title row, outside the data area.
+
+    Legends 'inside, in the empty corner' is a bet that the corner stays empty.
+    It does not: the loss curve, the histogram and the threshold sweep each
+    ended up with a legend sitting on the lines it was labelling. Titles here
+    are left-aligned, so the right end of the title row is always free.
+    """
+    ax.legend(loc="lower right", bbox_to_anchor=(1.0, 1.0), ncol=ncol,
+              frameon=False, fontsize=8, borderaxespad=0.2,
+              columnspacing=1.4, handlelength=1.6)
+
+
 def main() -> int:
     H = json.load(open(os.path.join(RUNS, "history.json")))
     E = np.load(os.path.join(RUNS, "eval.npz"))
@@ -53,18 +66,18 @@ def main() -> int:
     s = E["te_scores"]; lab = E["te_labels"].astype(int)
 
     # ------------------------------------------------------ fig 1: training --
-    fig, ax = plt.subplots(2, 2, figsize=(9.5, 6.4))
+    fig, ax = plt.subplots(2, 2, figsize=(10, 6.8))
 
     ax[0, 0].plot(ep, [r["train_loss"] for r in h], lw=1.6, color=BLUE, label="train")
     ax[0, 0].plot(ep, [r["val_loss"] for r in h], lw=1.6, color=ORANGE, label="validation")
     ax[0, 0].set_xlabel("epoch"); ax[0, 0].set_ylabel("cross-entropy")
-    ax[0, 0].set_title("Loss", loc="left"); ax[0, 0].legend()
+    ax[0, 0].set_title("Loss", loc="left"); leg(ax[0, 0])
 
     ax[0, 1].plot(ep, [r["train_acc"] for r in h], lw=1.6, color=BLUE, label="train")
     ax[0, 1].plot(ep, [r["val_acc"] for r in h], lw=1.6, color=ORANGE, label="validation")
     ax[0, 1].set_xlabel("epoch")
     ax[0, 1].set_ylabel(f"{d['train_identities']}-way accuracy")
-    ax[0, 1].set_title("Identity classification", loc="left"); ax[0, 1].legend()
+    ax[0, 1].set_title("Identity classification", loc="left"); leg(ax[0, 1])
 
     ax[1, 0].plot(ep, [r["lr"] for r in h], lw=1.6, color=GREY)
     ax[1, 0].set_xlabel("epoch"); ax[1, 0].set_ylabel("learning rate")
@@ -85,8 +98,8 @@ def main() -> int:
     ax[1, 1].axvline(v["held_out"]["thr"], color="black", lw=1.2,
                      label=f"threshold {v['held_out']['thr']:.2f}")
     ax[1, 1].set_xlabel("cosine similarity"); ax[1, 1].set_ylabel("pairs")
-    ax[1, 1].set_title("Score separation, held-out identities", loc="left")
-    ax[1, 1].legend()
+    ax[1, 1].set_title("Score separation, held-out", loc="left")
+    leg(ax[1, 1], ncol=3)
 
     fig.suptitle(f"Face embedding on {d['images']:,} LFW photographs · "
                  f"{m['params']:,} params · {t['epochs']} epochs · "
@@ -97,7 +110,7 @@ def main() -> int:
     fig.savefig(p1, dpi=200, bbox_inches="tight"); plt.close(fig)
 
     # ---------------------------------------------------- fig 2: evaluation --
-    fig, ax = plt.subplots(2, 2, figsize=(9.5, 6.6))
+    fig, ax = plt.subplots(2, 2, figsize=(10, 7.0))
 
     ax[0, 0].plot(E["te_fpr"], E["te_tpr"], lw=1.8, color=BLUE,
                   label=f"held-out   AUC {v['held_out']['auc']:.3f}")
@@ -105,7 +118,7 @@ def main() -> int:
                   label=f"seen in training   AUC {v['seen_in_training']['auc']:.3f}")
     ax[0, 0].plot([0, 1], [0, 1], lw=0.7, ls=":", color="#999")
     ax[0, 0].set_xlabel("false accept rate"); ax[0, 0].set_ylabel("true accept rate")
-    ax[0, 0].set_title("ROC", loc="left"); ax[0, 0].legend(loc="lower right")
+    ax[0, 0].set_title("ROC", loc="left"); leg(ax[0, 0], ncol=1)
 
     far = np.maximum(E["te_fpr"], 1e-4); frr = np.maximum(1 - E["te_tpr"], 1e-4)
     ax[0, 1].plot(far, frr, lw=1.8, color=BLUE)
@@ -126,7 +139,7 @@ def main() -> int:
     ax[1, 0].plot(ths, ACC, lw=1.6, color=BLUE, label="accuracy")
     ax[1, 0].axvline(v["held_out"]["thr"], color="black", lw=1.0, ls=":")
     ax[1, 0].set_xlabel("threshold"); ax[1, 0].set_ylabel("rate")
-    ax[1, 0].set_title("Threshold sweep", loc="left"); ax[1, 0].legend()
+    ax[1, 0].set_title("Threshold sweep", loc="left"); leg(ax[1, 0], ncol=3)
 
     # Calibration: does a similarity of x mean an x chance of being the same?
     qs = np.quantile(s, np.linspace(0, 1, 11))
