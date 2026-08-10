@@ -34,6 +34,7 @@ import numpy as np
 from .config import CameraConfig, ControlConfig
 from .geometry import height_px_for_distance, level_box
 from .lock import LockResult, LockState
+from .target_kf import TargetKF
 from .protocol import (FLAG_ALT_HOLD, FLAG_ARMED, FLAG_FAILSAFE, FLAG_LOCKED,
                        Command)
 
@@ -140,6 +141,7 @@ class FollowController:
         # a broken one at a glance.
         self.attitude_applied = (0.0, 0.0)
         self.lead_px = (0.0, 0.0)
+        self.kf = TargetKF()
         self.range_m: float | None = None
         self._searching = False
         self._search_started = 0.0
@@ -156,6 +158,10 @@ class FollowController:
         self._last_error = (0.0, 0.0, 0.0)
         self.attitude_applied = (0.0, 0.0)
         self.lead_px = (0.0, 0.0)
+        # The old target's motion says nothing about the next one's, and a
+        # stale velocity would be projected forward as lead on the first frame
+        # after re-acquisition.
+        self.kf.reset()
         self.range_m = None
         self._searching = False
         self._ever_locked = False
@@ -264,12 +270,33 @@ class FollowController:
         cx, cy = (x1 + x2) * 0.5, (y1 + y2) * 0.5
         box_h = max(y2 - y1, 1.0)
 
+        # --- smooth the target state ----------------------------------------
+        # Fed AFTER attitude compensation, so the filter models the subject's
+        # motion in the world rather than the airframe's motion plus theirs.
+        # Feeding it the raw box would have it dutifully smoothing the
+        # aircraft's own pitching.
+        if cfg.use_target_kf:
+            self.kf.predict(dt)
+            self.kf.update(cx, cy, box_h)
+            if self.kf.valid:
+                cx, cy = self.kf.centre
+                box_h = max(self.kf.box_h, 1.0)
+
         # --- aim where they will be, not where they were ---------------------
-        # Velocity comes from the tracker's Kalman filter in px/frame; scaling
-        # by dt converts to px/s without needing to know the frame rate.
         lead_x = lead_y = 0.0
         lead_s = self.lead_time_s
-        if lock.velocity is not None and lead_s > 0.0:
+        if cfg.use_target_kf and self.kf.valid and lead_s > 0.0:
+            # The filter's own forward projection, rather than a per-frame
+            # difference of two noisy detections scaled by a lead time. Same
+            # intent, far less jitter injected into an attitude setpoint.
+            ahead_x, ahead_y = self.kf.predict_ahead(lead_s)
+            lead_x = clamp(ahead_x - cx, -cfg.lead_max_px, cfg.lead_max_px)
+            lead_y = clamp(ahead_y - cy, -cfg.lead_max_px, cfg.lead_max_px)
+        elif lock.velocity is not None and lead_s > 0.0:
+            # Fallback path, kept for when the filter is disabled: the
+            # tracker's velocity is in px/FRAME, so dividing by dt converts it
+            # to px/s. That conversion is the reason the filter works in
+            # seconds throughout — a dropped frame changes what px/frame MEANS.
             vx, vy = lock.velocity
             lead_x = clamp(vx / dt * lead_s, -cfg.lead_max_px, cfg.lead_max_px)
             lead_y = clamp(vy / dt * lead_s, -cfg.lead_max_px, cfg.lead_max_px)

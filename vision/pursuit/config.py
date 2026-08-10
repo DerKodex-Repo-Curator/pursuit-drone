@@ -280,6 +280,13 @@ class ControlConfig:
     # vision (~40-70ms) + WiFi + the control loop; at 1.5 m/s and 3 m range a
     # walking person is ~75px ahead of their last reported position, which the
     # controller would otherwise chase forever without catching.
+    # Smooth the target state with a constant-velocity Kalman filter before
+    # any error is computed, and take the lead from its forward projection
+    # rather than from a per-frame difference of two noisy detections. Also
+    # keeps a usable estimate through the frames where detection drops out.
+    # See pursuit/target_kf.py.
+    use_target_kf: bool = True
+
     lead_time_s: float = 0.15
     # Kalman velocity is noisy on a freshly-created track, so bound how far the
     # aim point may be thrown from the measured position.

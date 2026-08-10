@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -376,27 +377,68 @@ class _Moving:
         self.hits = hits
 
 
+def _walk_across(ctrl, v_px_per_frame=16.7, n=25):
+    """Run a PHYSICALLY MOVING subject through a controller.
+
+    The subject is placed so that it crosses the frame centre exactly on the
+    final frame. At that instant the positional error is zero, so whatever yaw
+    is still commanded is the lead term and nothing else — which is the only
+    way to isolate lead without pinning the box.
+
+    An earlier version of this test did pin the box at centre while handing the
+    controller a track that CLAIMED 16.7 px/frame of motion. That state cannot
+    occur: ByteTrack's velocity is derived from the box actually moving. The
+    target Kalman filter measures the pixels rather than believing the claim,
+    and correctly reported no motion — which read as a regression and was
+    really the fixture being unphysical.
+    """
+    out = None
+    for i in range(n):
+        cx = W / 2 - v_px_per_frame * (n - 1 - i)
+        box = box_at(cx, H / 2)
+        lock = LockResult(LockState.LOCKED,
+                          track=_Moving(v_px_per_frame, 0.0),
+                          xyxy=box.xyxy, confidence=0.9, source="face",
+                          commanding=True)
+        out = ctrl.update(lock, W, H, 1 / 30)
+    return out
+
+
 def test_lead_aims_ahead_of_a_moving_subject():
-    cfg = ControlConfig()
-    static = FollowController(cfg)
-    leading = FollowController(cfg)
+    # 16.7 px/frame is a person walking 1.5 m/s at 3 m through a 65-degree lens
+    # at 30fps — the case the feature exists for. Anything much slower is
+    # swallowed by the deadband, which is correct: a 20 px aim offset on a
+    # 1280 px frame is not worth moving an aircraft for.
+    lead = _walk_across(FollowController(ControlConfig()))
+    none = _walk_across(FollowController(replace(ControlConfig(),
+                                                 lead_time_s=0.0)))
 
-    # 16.7 px/frame is a person walking 1.5 m/s at 3 m through a 65-degree
-    # lens at 30fps — the case the feature exists for. Anything much slower is
-    # swallowed by the deadband, which is correct: a 20px aim offset on a
-    # 1280px frame is not worth moving an aircraft for.
+    # Both see the subject dead centre on the final frame, so positional error
+    # is identical and zero. The difference is entirely the lead term.
+    assert lead.yaw_rate > none.yaw_rate + 3.0, "lead compensation did nothing"
+    assert lead.yaw_rate > 3.0
+
+
+def test_lead_falls_back_to_tracker_velocity_when_the_filter_is_off():
+    """The pre-filter path is still there and still works, so use_target_kf is
+    a real switch rather than a one-way door."""
+    off = replace(ControlConfig(), use_target_kf=False)
+    moved = _walk_across(FollowController(off))
+    still = _walk_across(FollowController(replace(off, lead_time_s=0.0)))
+    assert moved.yaw_rate > still.yaw_rate + 3.0
+
+
+def test_a_stationary_subject_gets_no_lead():
+    ctrl = FollowController(ControlConfig())
     box = box_at(W / 2, H / 2)
-    moving = LockResult(LockState.LOCKED, track=_Moving(16.7, 0.0),
-                        xyxy=box.xyxy, confidence=0.9, source="face",
-                        commanding=True)
+    lock = LockResult(LockState.LOCKED, track=_Moving(0.0, 0.0),
+                      xyxy=box.xyxy, confidence=0.9, source="face",
+                      commanding=True)
+    out = None
     for _ in range(40):
-        s = static.update(box, W, H, 1 / 30)
-        m = leading.update(moving, W, H, 1 / 30)
-
-    # A centred subject moving right should command a right yaw to get ahead,
-    # where a centred stationary one commands almost nothing.
-    assert abs(s.yaw_rate) < 1.0
-    assert m.yaw_rate > 3.0, "lead compensation did nothing"
+        out = ctrl.update(lock, W, H, 1 / 30)
+    assert abs(out.yaw_rate) < 1.0
+    assert abs(ctrl.lead_px[0]) < 5.0
 
 
 def test_lead_is_bounded():
