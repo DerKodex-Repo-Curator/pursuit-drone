@@ -1,0 +1,43 @@
+{
+  "project": "PURSUIT-1",
+  "revision": "B",
+  "toolchain": "kicad-native",
+  "note": "NOT a SKiDL pipeline project. KiCad-native, generated from scripts/design.py via the pcbnew API. This file lives at the PROJECT ROOT; hardware/ is a subdirectory, not a second project. SKiDL stage names are absent rather than faked.",
+  "board_sha256_16": "27a351f6ca1e4093",
+  "package_in_sync": true,
+  "verification": {
+    "drc": {
+      "errors": 0,
+      "unconnected": 0
+    },
+    "erc": {
+      "errors": 0
+    },
+    "netlist_diff": {
+      "mismatches": 0,
+      "pads": 123
+    },
+    "zone_island_gate": {
+      "passed": true,
+      "note": "scripts/audit_islands.py \u2014 fails if a pour fragment holding a pad escapes through <2 vias. Added in round 3 after a single-via flyback island survived three DRC-clean reviews."
+    },
+    "adversarial_review": {
+      "rounds": 3,
+      "reviewers_completed": 9,
+      "round3_verdicts": [
+        "FAIL",
+        "FAIL",
+        "PASS_WITH_NOTES",
+        "(sourcing)"
+      ],
+      "blockers_found_and_fixed": 2,
+      "note": "Round 3 reviewed the ROUND-2 REWORK and found 2 blockers: a reappeared flyback pour island, and C1 polarity silk that read backwards. Both fixed. See docs/VERIFICATION.md section 10."
+    }
+  },
+  "ready_for_fabrication": true,
+  "known_open_items": [
+    "ICM-42688-P live stock/price disagree between sources - verify before ordering",
+    "SOT-23 rotation unresolved between community DBs - verify on JLCPCB preview",
+    "1 cosmetic silk-clipped-at-edge DRC warning (fab trims it)"
+  ]
+}
