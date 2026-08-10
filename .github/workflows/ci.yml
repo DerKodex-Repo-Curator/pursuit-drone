@@ -1,0 +1,143 @@
+name: CI
+
+# A README that says "252 tests pass" is a claim. This makes it a fact that a
+# stranger can check without installing anything, and makes it fail loudly the
+# first time it stops being true.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vision:
+    name: vision — Python suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          # 3.12 rather than the 3.14 this was developed on: the point of CI is
+          # to prove the code is not accidentally tied to one machine's
+          # interpreter. If it breaks here, that is the bug, not the runner.
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy opencv-python-headless onnxruntime pytest PyYAML matplotlib
+
+      - name: Tests
+        # No models and no camera on a CI runner. The suite is built so the
+        # parts that need weights skip rather than fail, which is why the
+        # skip count is printed rather than hidden.
+        run: pytest vision/tests -q --tb=short -rs
+
+  simulation:
+    name: sim — closed-loop flight model
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install numpy pytest matplotlib
+      - name: Tests
+        run: pytest sim/flight/test_cascade.py -q --tb=short
+      - name: The sweep actually runs end to end
+        run: python sim/flight/lag_sweep.py --max-ms 51 --step-ms 17
+
+  firmware-host:
+    name: firmware — host tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --upgrade platformio
+      - name: Native suite
+        # Mixer, flight state machine, battery limiter, attitude filter, PID
+        # cascade, blackbox scaling, loop statistics and the cross-language
+        # interop vectors — all without an ESP32 attached.
+        run: pio test -e native
+        working-directory: firmware
+
+  firmware-target:
+    name: firmware — ESP32-S3 build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            firmware/.pio
+          key: pio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
+      - run: pip install --upgrade platformio
+      - name: Secrets header
+        # firmware/include/secrets.h is gitignored on purpose: the SoftAP
+        # passphrase is a real credential, and main.cpp #errors rather than
+        # build with a published default. CI gets the template.
+        run: cp firmware/include/secrets.h.example firmware/include/secrets.h
+      - run: pio run -e xiao
+        working-directory: firmware
+
+  protocol-drift:
+    name: protocol — generated header is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Regenerate and diff
+        # firmware/include/pursuit_link.h is GENERATED from
+        # vision/pursuit/protocol.py so the two ends of the link cannot drift.
+        # A generator is only a guarantee if something checks it was re-run.
+        run: |
+          cp firmware/include/pursuit_link.h /tmp/committed.h
+          python vision/gen_protocol_header.py
+          if ! diff -u /tmp/committed.h firmware/include/pursuit_link.h; then
+            echo "::error::pursuit_link.h is stale. Run vision/gen_protocol_header.py and commit the result."
+            exit 1
+          fi
+          echo "generated header matches protocol.py"
+
+  hygiene:
+    name: hygiene — no secrets, no biometrics, no large blobs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Nothing that should never be public
+        # This project builds a face-recognition system. Face embeddings are
+        # biometric data under UK GDPR and are not anonymous for being floats.
+        run: |
+          fail=0
+          if git ls-files | grep -E '\.npz$'; then
+            echo "::error::a face embedding is tracked"; fail=1
+          fi
+          if git ls-files | grep -E 'firmware/include/secrets\.h$'; then
+            echo "::error::secrets.h is tracked"; fail=1
+          fi
+          if git ls-files | grep -E '\.onnx$'; then
+            echo "::error::a model blob is tracked — fetch_models.py downloads these"; fail=1
+          fi
+          if grep -rn 'pursuit1flies' --include='*.cpp' --include='*.h' \
+               --include='*.py' . 2>/dev/null | grep -v secrets.h; then
+            echo "::error::the old hardcoded passphrase is back in the source"; fail=1
+          fi
+          big=$(git ls-files -z | xargs -0 ls -l 2>/dev/null \
+                | awk '$5 > 5000000 {print $5, $9}')
+          if [ -n "$big" ]; then echo "::warning::files over 5 MB:"; echo "$big"; fi
+          exit $fail
