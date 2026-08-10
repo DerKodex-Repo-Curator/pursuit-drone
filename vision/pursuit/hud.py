@@ -19,15 +19,23 @@ import numpy as np
 from .lock import LockState
 from .protocol import FLAG_ARMED, Command
 
-# BGR
-WHITE = (255, 255, 255)
-GREY = (140, 140, 140)
-DIM = (90, 90, 90)
-GREEN = (90, 230, 120)
-AMBER = (60, 190, 250)
-RED = (70, 70, 245)
-BLUE = (250, 190, 90)
-BG = (28, 26, 24)
+# BGR. Restrained on purpose.
+#
+# The default instinct for an overlay like this is saturated green-on-black
+# with translucent slabs behind everything — which is what every generated
+# "AI vision" mockup looks like, and it reads as a screensaver rather than an
+# instrument. Real flight OSDs, machine-vision inspection tools and broadcast
+# overlays all do the opposite: near-white text, hairline rules, ONE accent
+# reserved for state, and nothing decorative competing with the picture.
+WHITE = (238, 240, 242)     # slightly warm off-white, not clinical 255
+GREY = (150, 152, 155)
+DIM = (105, 107, 110)
+GREEN = (120, 200, 130)     # desaturated — an instrument green, not a laser
+AMBER = (90, 175, 225)
+RED = (80, 85, 220)
+BLUE = (205, 165, 105)
+BG = (22, 22, 24)
+RULE = (70, 72, 76)         # hairline separators
 
 STATE_COLOUR = {
     LockState.SEARCHING: GREY,
@@ -36,53 +44,75 @@ STATE_COLOUR = {
     LockState.LOST: RED,
 }
 
-FONT = cv2.FONT_HERSHEY_SIMPLEX
+FONT = cv2.FONT_HERSHEY_DUPLEX
+# SIMPLEX is the single-stroke plotter font every OpenCV demo ships with, and
+# it is the main reason an overlay looks like an OpenCV demo. DUPLEX draws the
+# same glyphs with a proper two-stroke weight and reads as typeset.
 
 
 def _text(img, s, org, scale=0.45, colour=WHITE, thick=1, shadow=True):
+    """Text with a centred outline, not an offset drop-shadow.
+
+    This used to draw the black pass at (x+1, y+1) with thickness+1. At these
+    scales that is not a shadow — it is a second, misaligned copy of every
+    glyph, and the whole HUD reads as doubled. An outline goes at the SAME
+    origin, thicker, underneath, so the coloured fill sits centred inside it.
+    """
     if shadow:
-        cv2.putText(img, s, (org[0] + 1, org[1] + 1), FONT, scale,
-                    (0, 0, 0), thick + 1, cv2.LINE_AA)
+        cv2.putText(img, s, org, FONT, scale, (0, 0, 0), thick + 2,
+                    cv2.LINE_AA)
     cv2.putText(img, s, org, FONT, scale, colour, thick, cv2.LINE_AA)
 
 
-def _panel(img, x, y, w, h, alpha=0.55):
+def _panel(img, x, y, w, h, alpha=0.86):
     """Translucent backing so text stays readable over a bright scene."""
     x2, y2 = min(x + w, img.shape[1]), min(y + h, img.shape[0])
     x, y = max(x, 0), max(y, 0)
     if x2 <= x or y2 <= y:
         return
+    # Near-opaque and genuinely dark, with a lit top edge. The old version was
+    # a 55%-grey wash: it dimmed the picture without ever becoming a surface,
+    # so text sat in fog. A panel should either be a surface or not exist.
     roi = img[y:y2, x:x2]
     roi[:] = cv2.addWeighted(roi, 1.0 - alpha,
                              np.full_like(roi, BG, dtype=np.uint8), alpha, 0)
+    cv2.line(img, (x, y), (x2 - 1, y), RULE, 1, cv2.LINE_AA)
 
 
-def _corner_box(img, xyxy, colour, thick=2, frac=0.22):
-    """Corner brackets rather than a full rectangle.
+def _corner_box(img, xyxy, colour, thick=1, frac=0.22):
+    """Corner brackets only.
 
-    A closed rectangle over a person hides their outline; brackets mark the
-    same extent while leaving the subject visible, which matters when you are
-    trying to judge whether the box is actually on the right person.
+    Long thin brackets read as a measurement reticle. A full rectangle reads
+    as a sticker, and a short thick bracket reads as a game HUD. 22% of each
+    edge is about where it stops looking decorative.
     """
     x1, y1, x2, y2 = (int(round(v)) for v in xyxy)
-    w, h = x2 - x1, y2 - y1
-    cx, cy = max(int(w * frac), 6), max(int(h * frac), 6)
-    for (px, py, dx, dy) in ((x1, y1, 1, 1), (x2, y1, -1, 1),
-                             (x1, y2, 1, -1), (x2, y2, -1, -1)):
-        cv2.line(img, (px, py), (px + dx * cx, py), colour, thick, cv2.LINE_AA)
-        cv2.line(img, (px, py), (px, py + dy * cy), colour, thick, cv2.LINE_AA)
+    cx = max(6, int((x2 - x1) * frac))
+    cy = max(6, int((y2 - y1) * frac))
+    for px, dx in ((x1, 1), (x2, -1)):
+        for py, dy in ((y1, 1), (y2, -1)):
+            cv2.line(img, (px, py), (px + dx * cx, py), colour, thick,
+                     cv2.LINE_AA)
+            cv2.line(img, (px, py), (px, py + dy * cy), colour, thick,
+                     cv2.LINE_AA)
 
 
 def _bar(img, x, y, w, h, value, limit, colour, label):
     """Signed bar centred on zero, with a tick at the limit."""
-    _panel(img, x, y, w, h, 0.45)
+    _panel(img, x, y, w, h, 0.62)
     cx = x + w // 2
-    cv2.line(img, (cx, y + 2), (cx, y + h - 2), DIM, 1)
+    # Quarter-scale ticks, so a deflection can be read as a fraction of the
+    # limit rather than just "some bar". Centre tick full height, quarters
+    # short — the same convention an analogue meter uses.
+    for f in (-1.0, -0.5, 0.5, 1.0):
+        tx = cx + int((w // 2 - 3) * f)
+        cv2.line(img, (tx, y + h - 6), (tx, y + h - 3), RULE, 1)
+    cv2.line(img, (cx, y + 3), (cx, y + h - 3), DIM, 1)
 
     frac = 0.0 if limit <= 0 else max(-1.0, min(1.0, value / limit))
     span = int((w // 2 - 3) * frac)
     if abs(span) >= 1:
-        cv2.rectangle(img, (cx, y + 3), (cx + span, y + h - 4), colour, -1)
+        cv2.rectangle(img, (cx, y + 4), (cx + span, y + h - 7), colour, -1)
     # Flag saturation: a pinned axis is the signature of a runaway loop.
     if abs(frac) > 0.98:
         cv2.rectangle(img, (x, y), (x + w - 1, y + h - 1), RED, 1)
@@ -116,7 +146,13 @@ class Hud:
                     continue
                 _corner_box(img, tr.xyxy, DIM, 1)
                 x1, y1 = int(tr.xyxy[0]), int(tr.xyxy[1])
-                _text(img, f"#{tr.track_id}", (x1 + 3, y1 - 6), 0.38, DIM)
+                # Name them if the gallery recognised them; a bare track id is
+                # only useful when it has not.
+                if tr.identity:
+                    tag = f"{tr.identity} {tr.identity_score:.2f}  not target"
+                else:
+                    tag = f"#{tr.track_id}"
+                _text(img, tag, (x1 + 3, y1 - 6), 0.42, DIM)
 
         # --- faces -----------------------------------------------------------
         if self.show_faces:

@@ -184,6 +184,15 @@ class Pipeline:
                     self.faces.embed(frame, face)
                     face_by_track[tracks[ti].track_id] = face
                     tracks[ti].face_score = face.score
+                    # Name EVERY recognised face, not only the target's. The
+                    # lock still follows one person; this just lets the HUD
+                    # say "that is Sina" instead of "#2", which is the whole
+                    # point of showing that it can tell people apart.
+                    # best_match with no restrict scores the full gallery.
+                    nm, sim = self.lock.gallery.best_match(face.embedding)
+                    if nm and sim >= self.cfg.face.match_thres:
+                        tracks[ti].identity = nm
+                        tracks[ti].identity_score = float(sim)
         t.face = (time.perf_counter() - t0) * 1e3
 
         # --- identity --------------------------------------------------------

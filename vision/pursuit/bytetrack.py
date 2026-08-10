@@ -114,6 +114,11 @@ class Track:
         self.body_descriptor: np.ndarray | None = None
         self.face_score: float = 0.0
         self.is_target: bool = False
+        # Who this track is, if a face was recognised against the gallery.
+        # Distinct from is_target: the aircraft follows ONE person, but it is
+        # useful — on the HUD and in a demo — to name the others it can see.
+        self.identity: str | None = None
+        self.identity_score: float = 0.0
 
     @classmethod
     def reset_ids(cls) -> None:
