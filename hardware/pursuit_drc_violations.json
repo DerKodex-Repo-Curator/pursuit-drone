@@ -1,0 +1,25 @@
+{
+  "board": "/Users/paing/Documents/pursuit_drone/hardware/pursuit.kicad_pcb",
+  "timestamp": "2026-08-04T16:57:23",
+  "total_violations": 1,
+  "violation_counts": {
+    "silk_edge_clearance": 1
+  },
+  "severity_counts": {
+    "error": 0,
+    "warning": 1,
+    "info": 0
+  },
+  "violations": [
+    {
+      "type": "silk_edge_clearance",
+      "severity": "warning",
+      "message": "Silkscreen clipped by board edge",
+      "location": {
+        "x": 162.514718,
+        "y": 79.0,
+        "unit": "mm"
+      }
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+* PURSUIT-1 brushed motor drive stage - worst case locked rotor, 32kHz 60% duty
+V1 batt 0 4.2
+Rbat batt vbat 0.05
+C1 vbat 0 220u Rser=0.03
+Vg drv 0 PULSE(0 3.3 5u 30n 30n 18.75u 31.25u)
+Rg drv gate 100
+Rpd gate 0 10k
+M1 sw gate 0 0 AO3400
+D1 sw vbat SS34
+Rm vbat mm 0.8
+Lm mm sw 100u
+.model AO3400 VDMOS(Rg=1.6 Rd=9m Rs=9m Vto=1.05 Kp=30 Lambda=0.05 Cgdmax=0.35n Cgdmin=0.03n Cgs=0.45n Cjo=0.35n Is=8n)
+.model SS34 D(Is=1e-5 Rs=0.03 N=1.3 Cjo=250p M=0.5 Eg=0.69 BV=40)
+.tran 0 1m 0 100n
+.meas TRAN Isteady AVG I(Lm) FROM 0.8m TO 1m
+.meas TRAN Ipk MAX I(Lm)
+.meas TRAN Vsw_clamp MAX V(sw)
+.meas TRAN Vbat_sag MIN V(vbat)
+.meas TRAN Pfet AVG V(sw)*Id(M1) FROM 0.8m TO 1m
+.meas TRAN Vgate_hi MAX V(gate)
+.end

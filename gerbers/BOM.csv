@@ -1,0 +1,29 @@
+Supplied by,Ref,Qty,Value,Package,Part / where to buy,Notes
+JLCPCB,U2,1,ICM-42688-P,LGA-14 2.5x3mm,LCSC C1850418 (~USD 17 each; Extended part),"6-axis IMU. LCSC's own MOQ is 100pcs - do NOT try to buy this yourself at qty 1-2, use JLCPCB's PCBA library (or Mouser 410-ICM-42688-P / Farnell for a single). Forces X-ray inspection. MSL1 - no bake. NEVER ultrasonic-clean."
+JLCPCB,Q1-Q4,4,AO3400A,SOT-23,LCSC C20917 (~GBP 0.05 ea) - marking A09T,30V 5.7A logic-level NMOS - the standard whoop motor FET
+JLCPCB,D1-D4,4,SS34,SMA/DO-214AC,LCSC C8678,3A Schottky flyback. Cathode band faces VBAT (marked on silk)
+JLCPCB,R1-R4,4,100R,0603,LCSC C22775,gate series resistors
+JLCPCB,R5-R8,4,1k,0603,LCSC C21190,"gate pulldowns - motors stay off during boot. 1k not 10k: it bounds the gate below the AO3400A threshold even against an unexpected ~45k pull-up on a PWM pin (10k would give 0.60V, within 50mV of the 0.65V minimum), and discharges the gate ~10x faster when the pin goes high-Z."
+JLCPCB,R9-R10,2,4.7k,0603,LCSC C23162,I2C pullups
+JLCPCB,R11-R12,2,100k,0603,LCSC C25803,battery divider (4.2V -> 2.1V ADC)
+JLCPCB,R13-R14,2,150R,0603,LCSC C22808,"LED series resistors. 150R not 470R - see the LED rows: with a ~2.0V Vf part on a 3.3V GPIO, 150R gives ~7-8mA."
+JLCPCB,C2,1,10nF X7R,0603,LCSC C57112,"IMU bypass at the C2 SITE (routes to U2 pin 5 VDDIO). NOTE: the value<->site mapping is set by the routing - fit exactly what this row says, do not go by the old assumption that C2=100nF."
+JLCPCB,C3,1,100nF X7R,0603,LCSC C14663,"IMU bypass at the C3 SITE (routes to U2 pin 8 VDD, 3.9mm away). This is the datasheet-mandated 100nF on VDD."
+JLCPCB,C4,1,2.2uF X5R 16V,0603,LCSC C23630 (Extended),IMU bulk on the VDDIO side (TDK BOM)
+DO NOT FIT,C6,0,22uF X5R 25V,0805,LCSC C45783 (pads only),"PADS ONLY - deliberately excluded from the JLCPCB BOM/CPL. The XIAO 3V3 rail is an SGM6029C buck whose datasheet recommends 5-10uF EFFECTIVE output capacitance; the module already carries 9.4uF nominal. Fitting C6+C7 put ~50-64uF effective on that node. Only fit if bring-up shows the 3V3 rail actually sagging."
+DO NOT FIT,C7,0,100uF X5R 6.3V,1206,LCSC C15008 (pads only),"PADS ONLY - see C6. Adding capacitance to a bare pad takes five minutes; removing a reflowed 1206 sitting 7.3mm from a 0.5mm-pitch LGA does not."
+JLCPCB,C8,1,100nF,0603,LCSC C14663,ADC sense filter
+JLCPCB,LED1,1,yellow LED 0805,0805,LCSC C84261 (NationStar NCD0805Y1),"FRONT orientation LED. Vf 1.6-2.6V. NOT white or blue: every white/blue 0805 is InGaN with Vf specified as a 2.6-3.6V BIN RANGE, and the upper bins simply never conduct from a 3.3V GPIO. No resistor value fixes that."
+JLCPCB,LED2,1,red LED 0805,0805,LCSC C84256 (NationStar NCD0805R1),"REAR orientation LED. Vf 1.6-2.6V. Both LEDs share one GPIO (LED_CTRL) so they are always on together - colour, not blink pattern, is what tells you nose from tail."
+YOU,C1,1,220-470uF 6.3V POLYMER ESR<=30mOhm ripple>=2A,7343/D case (2917),"Panasonic 6TPE220MI / 6TPE330MI or Kemet polymer equivalent","BELLY. MUST be polymer/tantalum. A plain aluminium electrolytic (150-600mOhm ESR) is a HIGHER impedance than the battery itself at 32kHz - it would suppress nothing and cook on ~1A ripple. POLARITY: the belly silk marks '+ C1' beside pad 1, and the footprint's silk bar is at that same end. Reversed across an unfused LiPo this vents."
+YOU,C10-C13,4,100nF 16V X7R,0603,any,"BELLY, one at each flyback. VBAT ceramic bypass. Do not omit: without these nothing on the board handles the MHz content of the switching edges"
+YOU,U1,1,Seeed XIAO ESP32S3 Sense,module on 2x 1x7 headers,Seeed 113991115 (~GBP 12) - Pimoroni/Mouser/Amazon UK,Flight controller + camera + WiFi. Comes with camera + U.FL antenna. Buy 2.54mm male pin headers (2x 1x7). USB edge faces the board's front - marked on silk three ways. NOTE: the Sense expansion board's three 4.7k SD pull-ups (behind solder pad J3) land on D9/MISO, D10/MOSI and SD_CS - i.e. on IMU_INT and LED_CTRL here, both harmless (the D9 one usefully serves the IMU's open-drain INT1). D8/SCK = M4_PWM has NO pull-up, only a 22R series link. Cutting J3 is optional and costs you the microSD slot, which this build does not use.
+YOU,J1,1,JST S2B-PH-K-S,right-angle THT,LCSC C173752 / any,"battery connector. CHECK PACK POLARITY WITH A METER FIRST - JST-PH is not standardized! The top silk marks '+' beside pad 1."
+YOU,J2,1,Pololu VL53L1X carrier #3415,7-pin breakout,Pololu 3415 (~GBP 12) via Pimoroni/Mouser,ToF altitude sensor. Mount belly-down on a RIGHT-ANGLE 1x7 header so it lies flat
+YOU,J4/J5,-,wire pads,-,-,J4: two short 24AWG wires to the XIAO underside BAT pads. J5: optional 20AWG battery pigtail
+YOU,MT1-MT4 motors,4,8520 coreless 8.5x20mm,-,"AliExpress/Amazon '8520 motor CW CCW pair' (~GBP 10/4pcs)",Buy 2x CW + 2x CCW. 1.0mm shaft. Verify polarity: red/blue = CW; white/black = CCW (varies by seller!)
+YOU,Props,4+spares,65mm 2-blade 1.0mm bore,-,"'65mm prop 8520/720' combo sets, or Hubsan X4 55mm as fallback",MUST be 1.0mm bore - most modern '65mm whoop' props are 1.5mm bore and will NOT fit
+YOU,Battery,2+,1S 650mAh HV LiPo whoop stick (PH2.0),~65x19x8mm ~18g,"GNB/Gaoneng or BetaFPV 650mAh 1S HV","650mAh not 450mAh: +5g buys +44% energy, so ~7.2 min hover instead of ~5.4. Same connector, no board change. Also buy a 1S USB charger - the XIAO's ~100mA onboard charge works but is slow."
+YOU,Headers,-,2.54mm male headers,THT,any,2x 1x7 straight (XIAO) + 1x7 right-angle (ToF)
+YOU,Camera mount,1,foam wedge or printed edge clip,-,-,"No screw holes: every bracket position sat on a drive stage, and metal M2 hardware there would bridge VBAT (head) to GND (nut) through the board. Clip/tape the camera to the front edge."
+YOU,Zip ties,8+,2.5mm mini cable ties,-,any,motor retention through the ring holes + battery strap

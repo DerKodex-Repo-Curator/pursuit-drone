@@ -1,0 +1,59 @@
+PURSUIT-1 hover rail check: baseline vs gripper, realistic 1S cell
+* Rm tuned so each motor draws the hover current for the stated AUW.
+* Rsrc = cell internal (90m) + wiring/JST (30m) = 120m, a realistic 450mAh 1S.
+* Vcell is the OPEN-CIRCUIT pack voltage; swept to find the brownout point.
+.param VCELL=4.2
+.param RM=2.9
+V1 batt 0 {VCELL}
+Rbat batt vbat 0.120
+C1 vbat 0 220u
+Rc1 cx 0 1e-3
+Vg1 d1 0 PULSE(0 3.3 5u 30n 30n 21.6u 31.25u)
+Vg2 d2 0 PULSE(0 3.3 5u 30n 30n 21.6u 31.25u)
+Vg3 d3 0 PULSE(0 3.3 5u 30n 30n 21.6u 31.25u)
+Vg4 d4 0 PULSE(0 3.3 5u 30n 30n 21.6u 31.25u)
+Rg1 d1 g1 100
+Rp1 g1 0 10k
+M1 s1 g1 0 0 AO3400 L=1u W=50000u
+DD1 s1 vbat SS34
+Rm1 vbat m1 {RM}
+L1 m1 s1 100u
+Rg2 d2 g2 100
+Rp2 g2 0 10k
+M2 s2 g2 0 0 AO3400 L=1u W=50000u
+DD2 s2 vbat SS34
+Rm2 vbat m2 {RM}
+L2 m2 s2 100u
+Rg3 d3 g3 100
+Rp3 g3 0 10k
+M3 s3 g3 0 0 AO3400 L=1u W=50000u
+DD3 s3 vbat SS34
+Rm3 vbat m3 {RM}
+L3 m3 s3 100u
+Rg4 d4 g4 100
+Rp4 g4 0 10k
+M4 s4 g4 0 0 AO3400 L=1u W=50000u
+DD4 s4 vbat SS34
+Rm4 vbat m4 {RM}
+L4 m4 s4 100u
+* servo load: 1.7-3.8g micro servo, ~400mA while repositioning the claw
+Rservo vbat sv 10
+Vsv sv 0 0
+.model AO3400 NMOS(Level=1 Vto=1.05 Kp=120 Lambda=0.05 Rd=0.012 Rs=0.008
++ Cgso=9n Cgdo=0.7n Cbd=0.35n Is=8n)
+.model SS34 D(Is=1e-5 Rs=0.03 N=1.3 Cjo=250p M=0.5 Eg=0.69 BV=40)
+.tran 100n 1.2m 0 100n
+.control
+let runs = 0
+foreach vc 4.20 4.00 3.85 3.70
+  alter V1 dc = $vc
+  tran 100n 1.2m 0 100n
+  let itot = i(L1)+i(L2)+i(L3)+i(L4)
+  meas tran vmin MIN v(vbat) FROM=0.9m TO=1.2m
+  meas tran vavg AVG v(vbat) FROM=0.9m TO=1.2m
+  meas tran iavg AVG itot FROM=0.9m TO=1.2m
+  echo "cell=$vc"
+  print vmin vavg iavg
+end
+.endc
+.end

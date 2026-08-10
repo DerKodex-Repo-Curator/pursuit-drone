@@ -1,0 +1,12 @@
+Designator,Value,KiCad rotation,What to confirm on JLCPCB's preview render
+D1,SS34,135.0,"SS34 SMA — CATHODE (banded end) must face VBAT, i.e. INBOARD toward the board centre along the arm."
+D2,SS34,45.0,"SS34 SMA — CATHODE (banded end) must face VBAT, i.e. INBOARD toward the board centre along the arm."
+D3,SS34,225.0,"SS34 SMA — CATHODE (banded end) must face VBAT, i.e. INBOARD toward the board centre along the arm."
+D4,SS34,315.0,"SS34 SMA — CATHODE (banded end) must face VBAT, i.e. INBOARD toward the board centre along the arm."
+LED1,LED-Yellow-Front-Vf2.6max,45.0,LED 0805 — cathode to GND. On this board GND is the pad nearer the board centre.
+LED2,LED-Red-Rear,0.0,LED 0805 — cathode to GND. On this board GND is the pad nearer the board centre.
+Q1,AO3400A,135.0,"AO3400A SOT-23 — pin1=Gate, pin2=Source, pin3=Drain. The single pin (Drain) faces OUTBOARD along the arm."
+Q2,AO3400A,45.0,"AO3400A SOT-23 — pin1=Gate, pin2=Source, pin3=Drain. The single pin (Drain) faces OUTBOARD along the arm."
+Q3,AO3400A,225.0,"AO3400A SOT-23 — pin1=Gate, pin2=Source, pin3=Drain. The single pin (Drain) faces OUTBOARD along the arm."
+Q4,AO3400A,315.0,"AO3400A SOT-23 — pin1=Gate, pin2=Source, pin3=Drain. The single pin (Drain) faces OUTBOARD along the arm."
+U2,ICM-42688-P,0.0,ICM-42688-P LGA-14 — pin 1 dot is at the board's FRONT-LEFT of the package (silk dot marks it). A 90 or 180 error here also silently rotates the gyro axes.

@@ -1,0 +1,4 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "pursuit")(type "KiCad")(uri "${KIPRJMOD}/pursuit.pretty")(options "")(descr "PURSUIT-1 project footprints: XIAO carrier, ICM-42688-P LGA-14, motor/wire pads, bare holes"))
+)
