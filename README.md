@@ -4,8 +4,14 @@
 follows one specific enrolled person by face re-identification.**
 
 [![CI](https://github.com/Pai-88/pursuit-drone/actions/workflows/ci.yml/badge.svg)](https://github.com/Pai-88/pursuit-drone/actions/workflows/ci.yml)
-&nbsp;·&nbsp; 191 Python + 85 native C++ tests
+&nbsp;·&nbsp; 207 Python + 85 native C++ tests
 &nbsp;·&nbsp; MIT
+
+[![system overview](docs/media/pursuit_mindmap.png)](docs/media/pursuit_mindmap.png)
+
+<sub>Click for full size. Two halves — the machine learning on a laptop, the
+flight control on an ESP32-S3 — joined by a 30-byte packet and nothing else.
+The red nodes are the two defects that would have destroyed the aircraft.</sub>
 
 There is no separate frame. The 2-layer FR4 board *is* the structure — motors
 clamp into rings routed through the arms — and it is generated from a canonical
@@ -76,7 +82,7 @@ Nothing below needs an aircraft, a board, or a camera.
 
 ```bash
 # 1. the off-board perception, control, lock and protocol stack
-python -m pytest vision/tests -q          # 159 pass with no models downloaded
+python -m pytest vision/tests -q          # 175 pass with no models downloaded
 
 # 2. the flight-critical firmware logic, compiled and run on the host
 cd firmware && pio test -e native         # 85 tests
@@ -89,7 +95,7 @@ For the full vision pipeline, fetch the ~295 MB of weights first — they are no
 in the repository, and two of them exceed GitHub's file-size limit:
 
 ```bash
-python vision/fetch_models.py && python -m pytest vision/tests -q   # 177 pass
+python vision/fetch_models.py && python -m pytest vision/tests -q   # 193 pass
 ```
 
 Then run it live on a webcam, with no drone involved at all:
@@ -117,6 +123,12 @@ camera / MJPEG over WiFi
   -> CRC-16 UDP, 30 Hz, 3x redundant  ------------>  watchdog, arming interlocks
                                      <------------  telemetry, 20 Hz
 ```
+
+There is a fuller version of this — every stage, every threshold, every failure
+guard — as a single sheet: [**architecture poster**](docs/media/pursuit_architecture.png),
+or by section: [vision](docs/media/arch_01_vision.png) ·
+[link](docs/media/arch_02_link.png) · [firmware](docs/media/arch_03_firmware.png) ·
+[operating it](docs/media/arch_04_operate.png).
 
 **Identity is two signals with different jobs.** The face *acquires* and
 re-confirms, and is strict. Body ReID only *sustains*. The appearance model
