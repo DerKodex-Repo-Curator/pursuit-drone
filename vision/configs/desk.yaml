@@ -1,0 +1,25 @@
+# Desk-testing profile:  run.py --config configs/desk.yaml --target <name>
+#
+# The flight defaults assume the subject is a few metres away and fills about
+# 45% of the frame height. Sitting at a laptop you fill 80-90%, so the pitch
+# axis sits pinned at its -14 deg limit permanently, commanding "back off" —
+# correct, but it means you cannot see the pitch loop respond while tuning.
+#
+# This profile retargets the standoff to arm's length so leaning in and out
+# moves the pitch bar through its range. It is a TUNING AID, not flight
+# settings: do not fly with it.
+
+control:
+  # You fill most of the frame at a desk, so aim for that instead of 0.45.
+  target_height_frac: 0.85
+  # Gentler, because at this range a small lean is a large fraction change.
+  pitch_kp: 18.0
+  pitch_kd: 2.5
+  # A laptop camera looks up at you; less downward bias keeps the crosshair
+  # somewhere sensible on your chest rather than off the bottom of the frame.
+  aim_y_bias: 0.04
+
+face:
+  # Re-confirm identity more often while tuning — you want to see the face vs
+  # body handover happening, not have it hidden behind a long cadence.
+  interval_locked: 3

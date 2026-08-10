@@ -1,0 +1,21 @@
+# PURSUIT-1 off-board vision.
+#
+# No torch, no ultralytics. Partly forced — this machine runs Python 3.14,
+# which torch has no wheels for — and partly the better choice: ONNX Runtime
+# puts the detector on the Apple Neural Engine via CoreML, the install is
+# ~40MB instead of ~2.5GB, and the same graph files run unchanged on a Jetson
+# or a Pi later.
+#
+#   python3 -m venv .venv
+#   .venv/bin/python -m pip install -r requirements.txt
+#   .venv/bin/python fetch_models.py
+
+numpy>=2.0
+scipy>=1.13          # linear_sum_assignment for track association
+opencv-python>=4.10
+onnxruntime>=1.20    # CoreMLExecutionProvider on Apple silicon
+certifi>=2024.0      # python.org's macOS build ships no CA bundle
+
+# optional
+PyYAML>=6.0          # --config profiles
+pytest>=8.0          # test suite

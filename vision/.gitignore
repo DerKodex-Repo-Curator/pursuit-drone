@@ -1,0 +1,7 @@
+.venv/
+models/
+__pycache__/
+*.pyc
+.pytest_cache/
+targets/*.npz
+docs/hud_*.png
