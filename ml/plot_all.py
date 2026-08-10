@@ -90,9 +90,12 @@ def main() -> int:
     # its target, and the dotted rule already marks the epoch. Orange rather
     # than grey so it reads as belonging to the validation curve it describes,
     # not to the grey learning-rate curve it sits on top of.
-    ax[1, 0].text(0.84, 0.93, f"validation collapses\nat epoch {ep[drop]}",
+    # Right edge held well clear of the dotted rule. At 0.84 the label was
+    # touching it; the gap has to be explicit, because the rule's position is
+    # set by the data and will move on the next run.
+    ax[1, 0].text(0.76, 0.94, f"validation collapses\nat epoch {ep[drop]}",
                   transform=ax[1, 0].transAxes, ha="right", va="top",
-                  fontsize=8, color=ORANGE)
+                  fontsize=8, color=ORANGE, linespacing=1.4)
 
     bins = np.linspace(-0.6, 1.0, 45)
     ax[1, 1].hist(s[lab == 0], bins=bins, color=RED, alpha=0.65, label="different")
