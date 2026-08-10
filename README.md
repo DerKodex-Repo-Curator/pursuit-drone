@@ -1,70 +1,213 @@
-# PURSUIT-1 — person-following PCB-frame micro quadcopter
+# PURSUIT-1
 
-The PCB **is** the airframe. A 2-layer 1.6mm FR4 X-frame (100mm wheelbase,
-91.91 x 91.91mm bounding box) carries the complete flight electronics:
+**A 92 mm quadcopter whose printed circuit board is its own airframe, that
+follows one specific enrolled person by face re-identification.**
 
-- **Seeed XIAO ESP32S3 Sense** (flight controller + OV2640/OV3660 camera +
-  WiFi) on 2.54mm headers, USB-C facing the front edge
-- **ICM-42688-P** 6-axis IMU (I2C @400kHz, addr 0x68, INT1 on D9)
-- **4x AO3400A** low-side brushed motor drivers (32kHz PWM) with SS34
-  flybacks, driving 8520 coreless motors clamped into the frame rings
-- **VL53L1X** (Pololu 3415) time-of-flight altitude sensor on the rear belly
-- 4x 100nF VBAT ceramic bypass on the belly, one at each flyback
-- 1S LiPo, JST-PH + solderable pigtail pads, battery telemetry divider
+[![CI](https://github.com/Pai-88/pursuit-drone/actions/workflows/ci.yml/badge.svg)](https://github.com/Pai-88/pursuit-drone/actions/workflows/ci.yml)
+&nbsp;·&nbsp; 191 Python + 85 native C++ tests
+&nbsp;·&nbsp; MIT
 
-Person detection/re-ID runs **off-board**: the drone streams camera frames
-over WiFi to a laptop (YOLO/MediaPipe + face-embedding lock), which returns
-attitude/throttle setpoints over UDP. The on-board loop runs stabilisation
-(Madgwick + cascaded PID at 1kHz) and altitude hold (30Hz ToF fusion).
+There is no separate frame. The 2-layer FR4 board *is* the structure — motors
+clamp into rings routed through the arms — and it is generated from a canonical
+Python netlist rather than drawn by hand. The flight firmware is written from
+the IMU registers up. The perception stack runs off-board on ONNX Runtime and
+speaks to the aircraft over a wire protocol that is generated from one source
+so the two ends cannot drift apart.
+
+> ### Status — read this first
+>
+> **The aircraft has never flown.** The boards are not yet fabricated, and the
+> PID gains are scaled from typical brushed-whoop values, not tuned on this
+> airframe.
+>
+> What *is* done and checked: the PCB passes a seven-gate executable release
+> check and is fabrication-ready; the firmware builds for the ESP32-S3 and its
+> safety-critical logic passes 85 host tests; the vision pipeline runs at 25 fps
+> on a laptop webcam and holds a lock on an enrolled person; the two ends have
+> been shown to agree byte-for-byte; and the control cascade has been analysed
+> against a plant model. Everything in this README that is a measurement says
+> so, and everything that is an estimate says that instead.
+
+---
+
+## The one result worth your time
+
+The outer control loop is closed *through the airframe*: pitching to chase a
+subject moves the camera, which moves where that subject appears in frame. That
+feedback path has a DC gain of
+
+```
+VIS_PITCH_KP / VFOV_HALF_DEG  =  34 / 26  =  1.31
+```
+
+Above unity — so correcting a subject who is 12 degrees high commands 15.7
+degrees of pitch and moves them *further* than the error that prompted it. Add
+any link delay and it oscillates.
+
+![transport-delay stability](docs/media/lag_stability.png)
+
+| transport delay | without attitude compensation | with it |
+|---|---|---|
+| 0 ms | settled | settled |
+| 17 ms — **one frame** | 7.6 deg p-p, growing | settled |
+| 102 ms | 22.3 deg p-p | settled |
+| 187 ms | 33.3 deg p-p | settled |
+| **boundary** | **~17 ms** | **> 200 ms** |
+
+The measured round trip is ~20 ms. Uncompensated, that is already past the
+boundary. The attitude compensation in `vision/pursuit/geometry.py` had
+previously been justified by argument alone; it now has a number, and the number
+says it is not a refinement of the design but the thing that makes it work.
+
+Reproduce it, and read the caveats — the mass properties are estimates and the
+motor time constant is a literature value:
+
+```bash
+python sim/flight/lag_sweep.py
+```
+
+Details and limitations: [`sim/flight/README.md`](sim/flight/README.md).
+
+---
+
+## Check it yourself
+
+Nothing below needs an aircraft, a board, or a camera.
+
+```bash
+# 1. the off-board perception, control, lock and protocol stack
+python -m pytest vision/tests -q          # 159 pass with no models downloaded
+
+# 2. the flight-critical firmware logic, compiled and run on the host
+cd firmware && pio test -e native         # 85 tests
+
+# 3. the closed-loop plant model and the stability result above
+python -m pytest sim/flight -q && python sim/flight/lag_sweep.py
+```
+
+For the full vision pipeline, fetch the ~295 MB of weights first — they are not
+in the repository, and two of them exceed GitHub's file-size limit:
+
+```bash
+python vision/fetch_models.py && python -m pytest vision/tests -q   # 177 pass
+```
+
+Then run it live on a webcam, with no drone involved at all:
+
+```bash
+python vision/enroll.py --name you --height 1.75
+python vision/run.py --target you
+```
+
+---
+
+## How it fits together
+
+```
+laptop                                              aircraft (ESP32-S3)
+------                                              -------------------
+camera / MJPEG over WiFi
+  -> YOLO11n person detection                       IMU (ICM-42688-P) 1 kHz
+  -> ByteTrack multi-object tracking                  -> Madgwick 6-axis filter
+  -> SCRFD face detection (head ROI)                  -> angle P
+  -> ArcFace 512-d embedding                          -> rate PID
+  -> person ReID 768-d                                -> mixer, desaturating
+  -> 4-state lock machine                             -> phase-staggered PWM
+  -> PD visual servo                                VL53L1X altitude hold 30 Hz
+  -> CRC-16 UDP, 30 Hz, 3x redundant  ------------>  watchdog, arming interlocks
+                                     <------------  telemetry, 20 Hz
+```
+
+**Identity is two signals with different jobs.** The face *acquires* and
+re-confirms, and is strict. Body ReID only *sustains*. The appearance model
+updates only on face-confirmed frames — unconditioned, it drifts onto a stranger
+within a minute. And a readable face scoring below 0.15 is treated as evidence
+*against*, not as absence of evidence: without that veto, an identity swap
+between two people in similar clothing was sustained by appearance alone,
+indefinitely.
+
+**The wire protocol is generated, not duplicated.** `vision/gen_protocol_header.py`
+emits `firmware/include/pursuit_link.h` from `vision/pursuit/protocol.py`, and CI
+regenerates and diffs it on every push. A cross-language test parses real
+Python-emitted bytes through the real firmware code path — because matching
+struct *sizes* prove nothing: field order can differ while sizes agree,
+endianness can be right in one direction only, and a CRC computed over a
+different byte range is self-consistent within each language and rejects
+everything across the link. All three of those pass both test suites separately
+and fail on the first flight.
+
+---
 
 ## Repository layout
 
 ```
-hardware/          KiCad 10 project (pursuit.kicad_pcb, pursuit.kicad_sch,
-                   pursuit.pretty/ custom footprints)
-gerbers/fab/       JLCPCB-ready gerbers + Excellon drill (Protel names)
-gerbers/           BOM.csv (hand-build list), PURSUIT-1_schematic.pdf,
-                   board renders, PURSUIT-1_JLCPCB.zip, and the three
-                   JLCPCB upload files (BOM / CPL / ORIENTATION_CHECK)
-scripts/           design.py    - canonical netlist (single source of truth)
-                   gen_pcb.py   - board generator (pcbnew API)
-                   gen_sch.py   - schematic generator
-                   routes.py    - explicit routing tables
-                   footprints.py- custom footprint emitter
-                   check_place.py - fast placement-collision checker
-                   audit_islands.py - pour-fragmentation release gate
-                   preflight.py   - order gate over the release artefacts
-                   check_sch.py   - schematic netlist vs design.py gate
-                   gen_jlcpcb.py  - JLCPCB BOM/CPL/orientation sheet
-                   release.py     - gerbers/drill/renders/PDF/zip + MANIFEST
-docs/              DESIGN.md, VERIFICATION.md,
-                   assembly_top.svg / assembly_bottom.svg (refdes map —
-                   open these while soldering)
-sim/               ngspice netlists for the motor drive + boot-safety proof
+hardware/       KiCad 10 project — pursuit.kicad_pcb, .kicad_sch, pursuit.pretty/
+scripts/        the board is GENERATED, not drawn
+                  design.py       canonical netlist — the single source of truth
+                  gen_pcb.py      board generator (pcbnew API)
+                  gen_sch.py      schematic generator
+                  routes.py       explicit routing tables
+                  preflight.py    7-gate order gate — must exit 0 before fab
+                  release.py      gerbers, drill, renders, PDF, zip, MANIFEST
+gerbers/        fabrication output + the three JLCPCB upload files
+
+firmware/       ESP32-S3, PlatformIO. Two environments on purpose:
+                  src/            madgwick, pid, mixer, motors, icm42688,
+                                  alt_hold, rangefinder, blackbox, loopstats,
+                                  benchtest, flight_state, battery, frame.h
+                  test/           85 host tests — everything safety-critical is
+                                  written free of Arduino headers so it runs
+                                  on a laptop
+                  include/        config.h pin map, generated pursuit_link.h
+
+vision/         off-board perception and control, ONNX Runtime + CoreML
+                  pursuit/        detector, bytetrack, face, reid, gallery,
+                                  lock, control, geometry, arbiter, pilot,
+                                  protocol, link, pipeline
+                  tests/          177 tests
+                  tools/          e2e_loop.py, degradation_sweep.py
+                  sim_drone.py    a fake aircraft for loopback testing
+
+sim/flight/     closed-loop plant model and the stability sweep above
+docs/           DESIGN.md, VERIFICATION.md, assembly SVGs, vendor/SOURCES.md
 ```
 
-The board is **generated, not drawn**: `design.py` holds the netlist,
-`gen_pcb.py`/`gen_sch.py` emit the KiCad files, and a 3-way netlist diff
-(design ↔ schematic ↔ PCB) plus KiCad ERC/DRC gate every change. The
-schematic is a real drawing — functional blocks, wired nets, power symbols,
-signal flow left to right — and `check_sch.py` re-derives its netlist with
-KiCad's own netlister and diffs it against `design.py` by both partition and
-net name, so a wire that stops short of a pin fails the build rather than
-merely looking plausible. To rebuild:
+---
 
-```
-python3 scripts/footprints.py
-<KiCad python3> scripts/gen_pcb.py
-<KiCad python3> scripts/gen_sch.py
-kicad-cli pcb drc --refill-zones --save-board hardware/pursuit.kicad_pcb
-python3 scripts/release.py
-<KiCad python3> scripts/gen_jlcpcb.py
-<KiCad python3> scripts/preflight.py
-```
+## Things that were wrong, and how they were caught
 
-`release.py` holds the export flags (`--subtract-soldermask`, absolute drill
-origin) in code rather than in a shell history — a re-export without them
-silently produces a different, un-reviewed silkscreen.
+Kept because the interesting part of a project is where it was wrong, and
+because each of these was found by a different kind of check.
+
+- **Yaw feedback was sign-inverted — guaranteed runaway on the first hover.**
+  The body frame is FLU, so a clockwise yaw reads gyro-Z *negative*; the headers
+  described it as "X forward, Y right, Z up", which is left-handed and was
+  simply a lie. Fixed in `firmware/src/frame.h`. The closed-loop test converges
+  with the fix and provably diverges without it.
+- **An accelerometer measures specific force.** Level and upright it reads
+  **+1g on +Z** — the table pushes up — not −1g. Inverted, the estimate is
+  exactly wrong rather than obviously broken, and the aircraft would "correct" a
+  30 degree bank by rolling to 60. Caught by a host test, not by reading.
+- **A clock-epoch bug that every unit test passed.** `cmd.t_ms` was stamped when
+  the packet was built, not when it was sent, so the round-trip computed against
+  the echo compared two unrelated epochs, fell outside the plausibility window,
+  and was silently discarded — leaving lead compensation pinned at its 150 ms
+  guess against a true 20 ms. Only `vision/tools/e2e_loop.py`, which runs the
+  whole chain under 10% packet loss and 5% corruption, could see it.
+- **Adding redundancy exposed a latent sequence bug.** `is_newer(5, 5)` returned
+  true, so an exact duplicate was accepted and re-applied. Harmless while each
+  command was sent once; live the moment the link began sending three copies.
+- **The camera was configured backwards.** `degradation_sweep.py` measured that
+  YOLO tolerates sensor noise (2 people found at gain 4x) and collapses under
+  motion blur (2 people at 5 px, **zero** at 15 px). An earlier version capped
+  gain at 4x to avoid noise — exactly the wrong priority for an airframe that
+  yaws. It now prefers a dark, noisy, short-exposure frame.
+- **`LOOP_HZ 1000` was an intention, not a measurement.** Nothing sampled the
+  real period, and the statistic the loop did keep — iterations per second — is
+  precisely the one a stall hides inside. `firmware/src/loopstats.h` keeps the
+  distribution instead.
+
+---
 
 ## Ordering (JLCPCB)
 
@@ -143,22 +286,35 @@ parts** — it shows every refdes in position.
 6. **Battery**: velcro pad on the belly front + zip-tie/strap through the
    two 3.2mm holes. Balance so the CG sits at the geometric centre.
 
-## Firmware requirement (not optional)
+## Two hard requirements the board places on the firmware
+
+Both are **implemented** — this section records why they exist, because both
+are the kind of thing that is invisible until an aircraft falls out of the air.
 
 SPICE simulation of the drive stage (see VERIFICATION.md §6) shows the pack
 rail sagging to **3.61 V at four-motor full throttle** with an optimistic
 60 mΩ source model — a real 450 mAh 1S cell is worse. The XIAO's 3V3 buck
 drops out around 3.5 V input, which would brown out the flight controller
-mid-air. The board already carries the sensor needed to prevent this: the
-VBAT_SENSE divider on D2. **Your firmware must read it and limit throttle /
-warn on a sagging pack.** Treat that as part of the first flyable build, not
-a later feature.
+mid-air. The board carries the sensor needed to prevent it: the VBAT_SENSE
+divider on D2.
 
-Second firmware requirement, free to implement: **stagger the four LEDC PWM
-channels by 90°** (`ledc_set_duty_with_hpoint()`, hpoint = 0, T/4, T/2,
-3T/4). By default all four channels on a timer rise on the same edge, which
-turns four 2.75A steps into one synchronised 11A step on the pack. Staggering
-cuts peak rail current to ~2.75A and roughly halves C1's ripple heating.
+→ `firmware/src/battery.cpp`. It keeps **two** filters deliberately: a 20 ms
+fast one for the sag limiter, which has to react *during* a burst or the buck
+browns out anyway, and a 2 s slow one for the land decision, because otherwise
+a normal throttle burst reads as a flat pack and the aircraft lands itself. The
+throttle floor is 0.35 — cutting to zero turns a descent into a fall, and a
+falling aircraft draws no current, so the voltage recovers and it oscillates
+its way down.
+
+Second requirement: **stagger the four LEDC PWM channels by 90°**
+(hpoint = 0, T/4, T/2, 3T/4). By default all four channels on a timer rise on
+the same edge, turning four 2.75 A steps into one synchronised 11 A step on the
+pack. Staggering cuts peak rail current to ~2.75 A and roughly halves C1's
+ripple heating.
+
+→ `firmware/src/motors.cpp`, and it must use `ledc_set_duty_with_hpoint()` from
+the IDF driver rather than Arduino's `ledcWrite()`: plain `ledc_set_duty()`
+resets hpoint to 0 and silently un-staggers everything on the first write.
 
 The same simulation confirms the safety property the design depends on:
 the gates cannot reach the AO3400A's 0.65 V threshold at reset.
