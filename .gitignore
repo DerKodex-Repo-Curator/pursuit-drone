@@ -70,3 +70,7 @@ firmware/include/secrets.h
 # they are the evidence, and they are small.
 ml/.venv/
 ml/runs/*.pt
+
+# SKiDL hook artefacts — the plugin drops these wherever it is invoked
+skidl_REPL.erc
+skidl_REPL.log
