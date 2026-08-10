@@ -216,30 +216,41 @@ void setup(void)
      * The aircraft stays in BOOT — motors physically disabled — unless the
      * IMU answers, self-tests and calibrates. Arming on a sensor that is not
      * there is worse than refusing to arm.
+     *
+     * A failure here used to `return` immediately. That kept the aircraft
+     * safe and made it undiagnosable: without an IMU the firmware never
+     * reached the camera, the blackbox or the link, so a bare XIAO on a desk
+     * — which is exactly the state hardware arrives in, before the PCB
+     * exists — could not be used to verify any of them.
+     *
+     * Now it degrades into bring-up mode instead. Every optional subsystem is
+     * still brought up and can be exercised from the bench console; the
+     * aircraft simply never leaves BOOT, so `sensors_ready()` is not called
+     * and the motors cannot be enabled by any path. The safety property is
+     * unchanged and now explicit rather than implied by control flow.
      */
-    if (!g_imu.begin()) {
-        Serial.printf("IMU FAILED: %s (who_am_i 0x%02X) — will not arm\n",
+    bool imu_ok = g_imu.begin();
+    if (!imu_ok) {
+        Serial.printf("IMU FAILED: %s (who_am_i 0x%02X, expected 0x47)\n",
                       g_imu.last_error(), g_imu.who_am_i());
-        return;
+    } else {
+        Serial.println("IMU ok (ICM-42688-P)");
+        Serial.println("calibrating gyro — keep still...");
+        if (!g_imu.calibrate_gyro()) {
+            Serial.printf("CALIBRATION FAILED: %s\n", g_imu.last_error());
+            imu_ok = false;
+        } else {
+            float bias[3];
+            g_imu.gyro_bias(bias);
+            Serial.printf("gyro bias  %.2f %.2f %.2f deg/s\n",
+                          bias[0], bias[1], bias[2]);
+            /* Snap the filter to the measured horizon rather than letting it
+             * converge from identity: an aircraft powered up on a slope would
+             * otherwise believe it is level for the first couple of seconds. */
+            ImuSample s = g_imu.read();
+            if (s.valid) g_ahrs.align_to_accel(s.ax, s.ay, s.az);
+        }
     }
-    Serial.println("IMU ok (ICM-42688-P)");
-
-    Serial.println("calibrating gyro — keep still...");
-    if (!g_imu.calibrate_gyro()) {
-        Serial.printf("CALIBRATION FAILED: %s — will not arm\n",
-                      g_imu.last_error());
-        return;
-    }
-    float bias[3];
-    g_imu.gyro_bias(bias);
-    Serial.printf("gyro bias  %.2f %.2f %.2f deg/s\n",
-                  bias[0], bias[1], bias[2]);
-
-    /* Snap the filter to the measured horizon rather than letting it converge
-     * from identity: an aircraft powered up on a slope would otherwise
-     * believe it is level for the first couple of seconds. */
-    ImuSample s = g_imu.read();
-    if (s.valid) g_ahrs.align_to_accel(s.ax, s.ay, s.az);
 
     /* --- optional sensors ------------------------------------------------
      * Neither of these gates arming. Without the rangefinder the aircraft
@@ -274,8 +285,41 @@ void setup(void)
         Serial.println("blackbox ABSENT (no PSRAM) — tuning will be blind");
     }
 
-    g_state.sensors_ready();
-    Serial.println("PURSUIT-1 ready — NEVER FLOWN, GAINS UNTUNED, PROPS OFF");
+    if (imu_ok) {
+        g_state.sensors_ready();
+        Serial.println("PURSUIT-1 ready — NEVER FLOWN, GAINS UNTUNED, "
+                       "PROPS OFF");
+    } else {
+        /* Deliberately loud. The dangerous version of this state is the one
+         * where someone assumes the aircraft is merely quiet. */
+        Serial.println("");
+        Serial.println("=============== BRING-UP MODE — NO IMU ============"
+                       "===========");
+        Serial.println(" The aircraft is held in BOOT. sensors_ready() was "
+                       "NOT called, so");
+        Serial.println(" the motors cannot be enabled by any path, including "
+                       "a valid armed");
+        Serial.println(" command over the link. This is not a fault state to "
+                       "clear — it is");
+        Serial.println(" what a board with no IMU is supposed to do.");
+        Serial.println("");
+        Serial.println(" Still fully testable from here:");
+        Serial.println("   camera + MJPEG stream      (on the XIAO module "
+                       "itself)");
+        Serial.println("   WiFi SoftAP + the UDP link (point the vision stack "
+                       "at it)");
+        Serial.println("   PSRAM blackbox allocation");
+        Serial.println("   battery sense on D2");
+        Serial.println("   motor PWM pins             ('1'-'4', drives GPIO "
+                       "with no FETs)");
+        Serial.println("");
+        Serial.println(" Expected on a BARE XIAO with no PURSUIT-1 board: the "
+                       "IMU and the");
+        Serial.println(" rangefinder are on the PCB, so both SHOULD be "
+                       "absent here.");
+        Serial.println("==================================================="
+                       "===========");
+    }
     bench_print_help();
 }
 
