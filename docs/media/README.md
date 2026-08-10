@@ -21,7 +21,16 @@ useful way, but it is worth knowing which figures can lie to you.
 | File | Produced by | Shows |
 |---|---|---|
 | `lag_stability.png` | `python sim/flight/lag_sweep.py` | Transport-delay stability of the pitch cascade, with and without attitude compensation. The result the whole control design rests on. |
-| `verification_roc.png` | `python vision/tools/verify_eval.py` | Face-verification score separation and error rates at the shipped threshold. Needs an enrolled gallery, which is gitignored — so this one cannot be regenerated from a clean clone. |
+| `verification_roc.png` | `python vision/tools/verify_eval.py` | Score separation and error rates at the shipped threshold, on the real enrolled gallery. Needs that gallery, which is gitignored as biometric data — so this one alone cannot be regenerated from a clean clone. |
+| `ml_training.png` | `ml/plot_all.py` | Loss, identity accuracy, LR schedule, generalisation gap. |
+| `ml_evaluation.png` | `ml/plot_all.py` | Score separation, ROC, DET, threshold sweep. |
+| `ml_decisions.png` | `ml/plot_all.py` | Data scaling, embedding width, size vs accuracy, calibration. The three ablation panels are each a training run from scratch. |
+| `training_curves.png` | `ml/plot_training.py` | The standalone loss and accuracy pair. |
+| `verification_bench.png` | `ml/plot_training.py` | ROC against pretrained ArcFace, and size vs accuracy. |
+
+All five ML figures regenerate from `ml/runs/` — `history.json`, `ablations.json`,
+`eval.npz` and `arcface.json` hold every recorded number. They need the `ml/.venv`
+(Python 3.11 + torch), not the vision venv.
 
 ## Authored — Figma is the master
 

@@ -138,6 +138,15 @@ within a minute. And a readable face scoring below 0.15 is treated as evidence
 between two people in similar clothing was sustained by appearance alone,
 indefinitely.
 
+**Verified on two real people, 2026-08-10.** 400 frames on a live webcam with a
+second person moving through frame, crossing in front, and remaining after the
+target left: **locked 98%** of frames (391/400, 5 coasting, 4 searching), never
+lost, and the lock never transferred. Face confidence dips to 0.73 during
+occlusion and recovers to 0.95 — body re-ID sustaining exactly as intended.
+That test had never been run until then, and it mattered: the second identity
+previously in the gallery turned out to be the same person as the first, so
+every earlier claim of discrimination had been resting on nothing.
+
 **The wire protocol is generated, not duplicated.** `vision/gen_protocol_header.py`
 emits `firmware/include/pursuit_link.h` from `vision/pursuit/protocol.py`, and CI
 regenerates and diffs it on every push. A cross-language test parses real
@@ -147,6 +156,63 @@ endianness can be right in one direction only, and a CRC computed over a
 different byte range is self-consistent within each language and rejects
 everything across the link. All three of those pass both test suites separately
 and fail on the first flight.
+
+---
+
+## The machine learning, and what it cost to skip it
+
+The identity layer runs ArcFace — 174 MB somebody else trained. That is the
+right call, and it was a call nobody had put a number on. So I trained one from
+scratch on real data and benchmarked both on the same protocol.
+
+**The data is real.** Labeled Faces in the Wild: 4,324
+photographs of 158 people, from news wire images. Not
+synthetic, not augmented from a handful of faces.
+
+**The protocol is the part that matters.** The split is by IDENTITY, not by
+image — 127 people to train on,
+31 held out and never seen. Splitting by image
+instead, which is what a flat `train_test_split` does, leaves the same faces on
+both sides:
+
+| | AUC | accuracy |
+|---|---|---|
+| **held-out identities** | 0.845 | **77.3%** |
+| identities seen in training | 0.984 | 93.9% |
+
+16.6 points of inflation, measured rather than asserted.
+
+![training](docs/media/ml_training.png)
+
+**Against the pretrained model, on identical pairs:** ArcFace scores
+96.4%, mine 77.3%. So
+136x the weights buys
+19 points. ArcFace is handicapped here
+by unaligned 62x47 crops — its published LFW figure is 99.8% — and the figure
+says so.
+
+![evaluation](docs/media/ml_evaluation.png)
+
+**The two plots that change a decision.** Accuracy is still climbing at 100% of
+the data (53.5% at 570 images →
+73.1% at 3720), so more data is the highest-value
+next move. Embedding width, sweeping 16 to 256, is flat inside run-to-run noise
+— so the 1.283 MB model is not width-limited, and on a 66 g aircraft
+the narrow version is free.
+
+![decisions](docs/media/ml_decisions.png)
+
+Every point is a training run from scratch. `ml/runs/` records each epoch, the
+split and the model, so the figures are traceable:
+
+```bash
+ml/.venv/bin/python ml/train_face_embed.py   # ~60 s on an M-series GPU
+ml/.venv/bin/python ml/ablations.py
+ml/.venv/bin/python ml/plot_all.py
+```
+
+Torch needs its own Python 3.11 environment — the vision stack runs 3.14, which
+has no torch wheels. That is why `ml/` is separate rather than inside `vision/`.
 
 ---
 
@@ -179,6 +245,12 @@ vision/         off-board perception and control, ONNX Runtime + CoreML
                   tests/          177 tests
                   tools/          e2e_loop.py, degradation_sweep.py
                   sim_drone.py    a fake aircraft for loopback testing
+
+ml/             training, on real data, in its own Python 3.11 venv
+                  train_face_embed.py  LFW, split by identity not by image
+                  ablations.py         data scaling + embedding width sweeps
+                  plot_all.py          twelve plots, four to a figure
+                  runs/                history.json, ablations.json, eval.npz
 
 sim/flight/     closed-loop plant model and the stability sweep above
 docs/           DESIGN.md, VERIFICATION.md, assembly SVGs, vendor/SOURCES.md
