@@ -77,8 +77,14 @@ class Embedder(nn.Module):
     threshold means the same thing it does everywhere else in this project.
     """
 
-    def __init__(self, emb=EMB_DIM, n_classes=None):
+    def __init__(self, emb=None, n_classes=None):
         super().__init__()
+        # Read the module global at CALL time, not as a default argument.
+        # `emb=EMB_DIM` binds once when the class is defined, so an ablation
+        # that sets EMB_DIM before constructing silently got the original
+        # width every time — five identical runs that looked like a real
+        # result.
+        emb = EMB_DIM if emb is None else emb
         def block(i, o):
             return nn.Sequential(
                 nn.Conv2d(i, o, 3, padding=1), nn.BatchNorm2d(o), nn.ReLU(),
@@ -209,7 +215,7 @@ def train(X, y, tr, train_ids, dev, rng, log):
             loss = F.cross_entropy(logits, yb, label_smoothing=0.1)
             loss.backward()
             opt.step()
-            loss_sum += float(loss) * len(sel)
+            loss_sum += float(loss.detach()) * len(sel)
             correct += int((logits.argmax(1) == yb).sum())
             tot += len(sel)
         sched.step()
