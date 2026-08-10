@@ -27,23 +27,40 @@ REPO = os.path.dirname(ROOT)
 RUNS = os.path.join(ROOT, "runs")
 OUT = os.path.join(REPO, "docs", "media")
 
-C = dict(bg="#0B0E14", card="#161C29", hair="#2A3346", t1="#E8ECF4",
-         t2="#94A1B8", t3="#6B7A94", data="#5B9CFF", ml="#A78BFA",
-         ok="#3DD68C", warn="#F2B441", danger="#F2545B")
+# Plain scientific styling, on purpose.
+#
+# An earlier version of this file drew these on a near-black background with
+# saturated blue/purple/green accents, rounded cards and accent bars. It looked
+# like every AI-generated dashboard of the last two years, because that palette
+# IS the Tailwind default that those tools emit — and a reader pattern-matches
+# it before reading a single number. For a figure whose entire job is to be
+# believed, that is a self-inflicted wound.
+#
+# So: white ground, black text, muted colours, matplotlib defaults left alone.
+# This is what a figure in a paper looks like.
+C = dict(mine="#1b6ca8", pre="#7a7a7a", inflated="#c0392b",
+         train="#1b6ca8", val="#d1701a", grid="#cccccc", note="#555555")
 
 plt.rcParams.update({
-    "font.family": "sans-serif", "font.sans-serif": ["Inter", "DejaVu Sans"],
-    "text.color": C["t1"], "axes.labelcolor": C["t2"],
-    "xtick.color": C["t3"], "ytick.color": C["t3"],
-    "axes.edgecolor": C["hair"], "figure.facecolor": C["bg"],
-    "axes.facecolor": C["card"], "savefig.facecolor": C["bg"],
+    "font.family": "sans-serif",
+    "font.sans-serif": ["Helvetica Neue", "Helvetica", "Arial", "DejaVu Sans"],
+    "font.size": 10,
+    "axes.titlesize": 11,
+    "axes.labelsize": 10,
+    "axes.spines.top": False,
+    "axes.spines.right": False,
+    "axes.grid": True,
+    "grid.color": C["grid"],
+    "grid.linewidth": 0.6,
+    "grid.alpha": 0.7,
+    "legend.frameon": False,
+    "figure.facecolor": "white",
+    "axes.facecolor": "white",
+    "savefig.facecolor": "white",
 })
 
 
 def style(ax):
-    for s in ax.spines.values():
-        s.set_color(C["hair"])
-    ax.grid(alpha=0.16, color=C["t3"], lw=0.9)
     ax.set_axisbelow(True)
     return ax
 
@@ -110,24 +127,24 @@ def main() -> int:
     ep = [r["epoch"] for r in h]
 
     # ------------------------------------------------------- training curves --
-    fig, (a1, a2) = plt.subplots(2, 1, figsize=(11, 9), sharex=True)
+    fig, (a1, a2) = plt.subplots(2, 1, figsize=(7.5, 6.2), sharex=True)
     style(a1); style(a2)
 
-    a1.plot(ep, [r["train_loss"] for r in h], lw=2.6, color=C["data"], label="train")
-    a1.plot(ep, [r["val_loss"] for r in h], lw=2.6, color=C["warn"], label="validation")
+    a1.plot(ep, [r["train_loss"] for r in h], lw=1.8, color=C["train"], label="train")
+    a1.plot(ep, [r["val_loss"] for r in h], lw=1.8, color=C["val"], label="validation")
     a1.set_ylabel("cross-entropy loss")
-    a1.legend(facecolor=C["card"], edgecolor=C["hair"], labelcolor=C["t1"])
+    a1.legend(loc="upper right")
     d = H["dataset"]; m = H["model"]; t = H["training"]
     a1.set_title(
         f"Face embedding trained from scratch on {d['images']:,} real LFW "
         f"photographs\n{m['params']:,} parameters ({m['mb_fp32']} MB) · "
         f"{t['epochs']} epochs · {t['seconds']}s on {t['device'].upper()} · "
-        f"seed {t['seed']}", fontsize=11.5, color=C["t1"])
+        f"seed {t['seed']}", fontsize=11, loc="left")
 
-    a2.plot(ep, [r["train_acc"] for r in h], lw=2.6, color=C["data"], label="train")
-    a2.plot(ep, [r["val_acc"] for r in h], lw=2.6, color=C["warn"], label="validation")
+    a2.plot(ep, [r["train_acc"] for r in h], lw=1.8, color=C["train"], label="train")
+    a2.plot(ep, [r["val_acc"] for r in h], lw=1.8, color=C["val"], label="validation")
     a2.set_xlabel("epoch"); a2.set_ylabel(f"identity accuracy\n({d['train_identities']}-way)")
-    a2.legend(facecolor=C["card"], edgecolor=C["hair"], labelcolor=C["t1"])
+    a2.legend(loc="upper left")
 
     # The honest annotation: validation went WORSE before it got better.
     vl = [r["val_loss"] for r in h]
@@ -137,21 +154,21 @@ def main() -> int:
                     "representation generalises",
                     xy=(ep[worst], vl[worst]),
                     xytext=(ep[worst] + 2, max(vl) * 0.93),
-                    arrowprops=dict(arrowstyle="->", color=C["t3"]),
-                    fontsize=9.5, color=C["t3"])
+                    arrowprops=dict(arrowstyle="->", color=C["note"], lw=0.9),
+                    fontsize=9, color=C["note"])
 
     fig.tight_layout()
     p1 = os.path.join(OUT, "training_curves.png")
-    fig.savefig(p1, dpi=140); plt.close(fig)
+    fig.savefig(p1, dpi=200, bbox_inches="tight"); plt.close(fig)
 
     # -------------------------------------------------- verification benchmark --
-    fig, (b1, b2) = plt.subplots(1, 2, figsize=(13, 6))
+    fig, (b1, b2) = plt.subplots(1, 2, figsize=(10, 4.4))
     style(b1); style(b2)
 
     v = H["verification"]
-    b1.plot(E["te_fpr"], E["te_tpr"], lw=3, color=C["ok"],
+    b1.plot(E["te_fpr"], E["te_tpr"], lw=2.0, color=C["mine"],
             label=f"held-out identities   AUC {v['held_out']['auc']:.3f}")
-    b1.plot(E["tr_fpr"], E["tr_tpr"], lw=3, ls="--", color=C["danger"],
+    b1.plot(E["tr_fpr"], E["tr_tpr"], lw=1.6, ls="--", color=C["inflated"],
             label=f"identities seen in training   AUC {v['seen_in_training']['auc']:.3f}")
 
     pairs = None
@@ -172,36 +189,35 @@ def main() -> int:
         print(f"  (ArcFace comparison skipped: {exc})")
 
     if af:
-        b1.plot(af["fpr"], af["tpr"], lw=3, color=C["ml"],
+        b1.plot(af["fpr"], af["tpr"], lw=2.0, color=C["pre"],
                 label=f"ArcFace, pretrained   AUC {af['auc']:.3f}")
-    b1.plot([0, 1], [0, 1], lw=1.2, ls=":", color=C["t3"])
+    b1.plot([0, 1], [0, 1], lw=0.8, ls=":", color="#999999")
     b1.set_xlabel("false accept rate"); b1.set_ylabel("true accept rate")
-    b1.set_title("Verification ROC — identical image pairs", fontsize=11.5)
-    b1.legend(facecolor=C["card"], edgecolor=C["hair"], labelcolor=C["t1"],
-              fontsize=9.5, loc="lower right")
+    b1.set_title("Verification ROC, identical image pairs", loc="left")
+    b1.legend(fontsize=8.5, loc="lower right")
 
     # size vs accuracy
     labels = ["mine\n(trained here)", "ArcFace\n(pretrained)"]
     sizes = [m["mb_fp32"], 174.4]
     accs = [v["held_out"]["acc"] * 100, (af["acc"] * 100) if af else np.nan]
-    cols = [C["ok"], C["ml"]]
-    bars = b2.bar(labels, accs, color=cols, width=0.55)
+    cols = [C["mine"], C["pre"]]
+    bars = b2.bar(labels, accs, color=cols, width=0.5)
     for bar, s, a in zip(bars, sizes, accs):
         if np.isfinite(a):
             b2.text(bar.get_x() + bar.get_width()/2, a + 1.5,
-                    f"{a:.1f}%\n{s:.1f} MB", ha="center", fontsize=11,
-                    color=C["t1"], weight="bold")
+                    f"{a:.1f}%\n{s:.1f} MB", ha="center", fontsize=9.5,
+                    color="black")
     b2.set_ylim(0, 108); b2.set_ylabel("verification accuracy (%)")
-    b2.set_title(f"{sizes[1]/sizes[0]:.0f}x the size — what does it buy?",
-                 fontsize=11.5)
+    b2.set_title(f"{sizes[1]/sizes[0]:.0f}x the weights, +{accs[1]-accs[0]:.0f} points",
+                 loc="left")
 
-    fig.suptitle("Held-out identities only. ArcFace is scored on the same "
-                 "unaligned 62x47 crops,\nwhich understates it — its published "
-                 "LFW figure is 99.8% with proper alignment.",
-                 fontsize=10, color=C["t3"], y=0.02)
+    fig.text(0.5, 0.015, "Held-out identities only. ArcFace scored on the same "
+             "unaligned 62x47 crops, which understates it; its published LFW "
+             "figure is 99.8% with alignment.",
+             ha="center", fontsize=8.5, color=C["note"])
     fig.tight_layout(rect=[0, 0.06, 1, 1])
     p2 = os.path.join(OUT, "verification_bench.png")
-    fig.savefig(p2, dpi=140); plt.close(fig)
+    fig.savefig(p2, dpi=200, bbox_inches="tight"); plt.close(fig)
 
     print(f"wrote {os.path.relpath(p1, REPO)}")
     print(f"wrote {os.path.relpath(p2, REPO)}")
