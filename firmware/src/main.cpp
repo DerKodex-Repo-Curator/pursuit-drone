@@ -31,6 +31,7 @@
 #include "flight_state.h"
 #include "frame.h"
 #include "icm42688.h"
+#include "loopstats.h"
 #include "madgwick.h"
 #include "mixer.h"
 #include "motors.h"
@@ -71,6 +72,12 @@ static Battery g_batt;
 static uint32_t g_telem_seq = 0;
 static uint32_t g_loop_count = 0;
 static uint32_t g_loop_hz = 0;
+
+/* Loop-period distribution against the LOOP_HZ budget. The mean rate above is
+ * kept because telemetry carries it, but it is the number that hides a stall;
+ * this is the one to read after a flight. Exposed so the bench console can
+ * print it. */
+LoopStats g_loop_stats(1000000UL / LOOP_HZ);
 
 static Icm42688 g_imu;
 static Madgwick g_ahrs(0.06f);
@@ -284,8 +291,16 @@ void loop(void)
 
     const uint32_t now_ms = millis();
     const uint32_t now_us = micros();
-    const float dt_s = (float)(now_us - last_loop_us) * 1e-6f;
+    const uint32_t period_us = now_us - last_loop_us;
+    const float dt_s = (float)period_us * 1e-6f;
     last_loop_us = now_us;
+
+    /* Characterise the loop rather than assert it. The very first iteration
+     * measures the gap since last_loop_us was zero-initialised — an artefact
+     * of boot, not a stall — so it is skipped. */
+    static bool first_loop = true;
+    if (first_loop) first_loop = false;
+    else            g_loop_stats.sample(period_us);
 
     /* Bench console. Only ever reachable while IDLE — bench_key() and
      * bench_update() both re-check the state, so a command arriving mid-test

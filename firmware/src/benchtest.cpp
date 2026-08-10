@@ -9,6 +9,7 @@
 #include "config.h"
 #include "flight_state.h"
 #include "icm42688.h"
+#include "loopstats.h"
 #include "madgwick.h"
 #include "mixer.h"
 #include "motors.h"
@@ -67,6 +68,47 @@ void orientation_report(const BenchDeps &d)
 }
 
 }  /* namespace */
+
+void bench_print_loop_timing(void)
+{
+    /* config.h declares LOOP_HZ. This prints whether the aircraft actually
+     * achieved it, as a distribution rather than an average — an average is
+     * exactly the statistic a stall hides inside. */
+    const LoopStats &s = g_loop_stats;
+    if (s.count() == 0) { Serial.println("  loop        (no samples yet)"); return; }
+
+    Serial.printf("  loop        budget %luus  mean %luus  min %luus  "
+                  "WORST %luus\n",
+                  (unsigned long)s.budget_us(), (unsigned long)s.mean_us(),
+                  (unsigned long)s.min_us(), (unsigned long)s.max_us());
+    Serial.printf("              p50 <=%luus  p99 <=%luus  p99.9 <=%luus\n",
+                  (unsigned long)s.percentile_us(0.50f),
+                  (unsigned long)s.percentile_us(0.99f),
+                  (unsigned long)s.percentile_us(0.999f));
+    Serial.printf("              overruns %lu / %lu  (%lu ppm)  %s\n",
+                  (unsigned long)s.overruns(), (unsigned long)s.count(),
+                  (unsigned long)s.overrun_ppm(),
+                  s.overruns() == 0 ? "(budget met)"
+                                    : "(budget MISSED — see histogram)");
+
+    Serial.println("              period histogram:");
+    for (int i = 0; i < LOOPSTATS_BUCKETS; i++) {
+        const uint32_t n = s.bucket(i);
+        if (n == 0) continue;
+        const uint32_t edge = LoopStats::bucket_edge_us(i);
+        char label[16];
+        if (edge == UINT32_MAX) snprintf(label, sizeof(label), "  >10000");
+        else                    snprintf(label, sizeof(label), "  <=%5lu",
+                                         (unsigned long)edge);
+        /* One bar character per 2% of samples, so the shape is readable on a
+         * 80-column serial console without any host-side tooling. */
+        const uint32_t pct = (uint32_t)(((uint64_t)n * 100ULL) / s.count());
+        Serial.printf("            %sus %7lu  %2lu%% ", label,
+                      (unsigned long)n, (unsigned long)pct);
+        for (uint32_t b = 0; b < pct / 2; b++) Serial.print('#');
+        Serial.println("");
+    }
+}
 
 void bench_print_help(void)
 {
@@ -204,6 +246,7 @@ void bench_update(uint32_t now_ms, const BenchDeps &d)
                                                   "flying)" : "");
         Serial.printf("  rangefinder %s\n",
                       d.tof->available() ? "OK" : "absent (no altitude hold)");
+        bench_print_loop_timing();
         Serial.println("---------------------\n");
         g_mode = Mode::Off;
         break;

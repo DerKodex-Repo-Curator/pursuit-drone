@@ -50,4 +50,9 @@ void bench_abort(const char *why);
 
 void bench_print_help(void);
 
+/* Loop-period distribution against the LOOP_HZ budget: mean, worst case,
+ * percentiles, overrun count and an ASCII histogram. Included in the 's'
+ * report and printable on its own. */
+void bench_print_loop_timing(void);
+
 #endif /* PURSUIT_BENCHTEST_H */
