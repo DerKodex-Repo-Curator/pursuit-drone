@@ -1,0 +1,6 @@
+{
+  "auc": 0.9873879999999999,
+  "acc": 0.9636666666666667,
+  "mb": 174.4,
+  "note": "unaligned 62x47 LFW crops; published LFW figure is 99.8% with landmark alignment"
+}

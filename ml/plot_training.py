@@ -225,6 +225,12 @@ def main() -> int:
     print(f"wrote {os.path.relpath(p1, REPO)}")
     print(f"wrote {os.path.relpath(p2, REPO)}")
     if af:
+        # Cache it: plot_all.py needs the same number, and recomputing a
+        # measurement in two places is how two figures come to disagree.
+        with open(os.path.join(RUNS, "arcface.json"), "w") as fh:
+            json.dump(dict(auc=af["auc"], acc=af["acc"], mb=174.4,
+                           note="unaligned 62x47 LFW crops; published LFW "
+                                "figure is 99.8% with landmark alignment"), fh, indent=2)
         print(f"\nArcFace on the same pairs: AUC {af['auc']:.4f}, "
               f"acc {af['acc']*100:.1f}%")
         print(f"Mine:                      AUC {v['held_out']['auc']:.4f}, "
