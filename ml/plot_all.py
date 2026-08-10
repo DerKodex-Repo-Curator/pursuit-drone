@@ -85,12 +85,14 @@ def main() -> int:
     # The schedule explains the shape of the loss curve, which is why it is here.
     vl = [r["val_loss"] for r in h]
     drop = int(np.argmax(np.array(vl[:-1]) - np.array(vl[1:]))) + 1
-    ax[1, 0].axvline(ep[drop], color=ORANGE, ls=":", lw=1.2)
-    ax[1, 0].annotate(f"validation collapses\nat epoch {ep[drop]}",
-                      xy=(ep[drop], h[drop]["lr"]),
-                      xytext=(ep[drop] - 21, max(r["lr"] for r in h) * 0.42),
-                      arrowprops=dict(arrowstyle="->", color=GREY, lw=0.8),
-                      fontsize=8, color="#555")
+    ax[1, 0].axvline(ep[drop], color=ORANGE, ls=":", lw=1.4)
+    # No leader line: the arrow had to cross the whole cosine curve to reach
+    # its target, and the dotted rule already marks the epoch. Orange rather
+    # than grey so it reads as belonging to the validation curve it describes,
+    # not to the grey learning-rate curve it sits on top of.
+    ax[1, 0].text(0.84, 0.93, f"validation collapses\nat epoch {ep[drop]}",
+                  transform=ax[1, 0].transAxes, ha="right", va="top",
+                  fontsize=8, color=ORANGE)
 
     bins = np.linspace(-0.6, 1.0, 45)
     ax[1, 1].hist(s[lab == 0], bins=bins, color=RED, alpha=0.65, label="different")
