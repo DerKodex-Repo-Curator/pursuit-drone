@@ -53,45 +53,55 @@ MEAS = os.path.join(REPO, "docs", "media", "measurements.json")
 # 1080 x 1350 at 100 dpi. Points, not pixels, in matplotlib: px * 72/100.
 W_IN, H_IN, DPI = 10.80, 13.50, 100
 PX = 72.0 / DPI                     # multiply a pixel size by this to get points
-BODY, HEAD, HERO, SMALL = 44*PX, 76*PX, 104*PX, 34*PX
+BODY, HEAD, HERO, SMALL = 44*PX, 72*PX, 86*PX, 34*PX
 
-C = dict(bg="#0B0E14", card="#161C29", raised="#1F2739", hair="#2A3346",
-         t1="#E8ECF4", t2="#94A1B8", t3="#6B7A94",
-         data="#5B9CFF", ml="#A78BFA", ctrl="#22C1A6",
-         warn="#F2B441", danger="#F2545B", ok="#3DD68C")
+# Light, plain, and deliberately undesigned.
+#
+# The first version of this deck was near-black with saturated blue/purple/green
+# accents and rounded cards. That is the Tailwind default palette every AI tool
+# emits, and a reader pattern-matches it before reading a number — which, on a
+# post whose whole purpose is to be believed, works against you. White ground,
+# near-black text, matplotlib's own muted colours.
+C = dict(bg="#FFFFFF", card="#F4F5F7", raised="#EBEDF0", hair="#D8DCE2",
+         t1="#111418", t2="#3F4650", t3="#6B7280",
+         data="#1b6ca8", ml="#6b4fa8", ctrl="#1a7f6b",
+         warn="#b0700f", danger="#b02a2a", ok="#1a7f4b")
 
 plt.rcParams.update({
     "font.family": "sans-serif",
-    "font.sans-serif": ["Inter", "Helvetica Neue", "DejaVu Sans"],
+    "font.sans-serif": ["Helvetica Neue", "Helvetica", "Arial", "DejaVu Sans"],
     "text.color": C["t1"], "axes.labelcolor": C["t2"],
     "xtick.color": C["t3"], "ytick.color": C["t3"],
-    "axes.edgecolor": C["hair"], "figure.facecolor": C["bg"],
-    "axes.facecolor": C["card"], "savefig.facecolor": C["bg"],
+    "axes.edgecolor": C["hair"],
+    "axes.spines.top": False, "axes.spines.right": False,
+    "legend.frameon": False,
+    "figure.facecolor": C["bg"], "axes.facecolor": C["bg"],
+    "savefig.facecolor": C["bg"],
 })
 
 
 def slide(n):
     fig = plt.figure(figsize=(W_IN, H_IN), dpi=DPI)
-    fig.text(0.90, 0.035, f"{n}", ha="right", va="center",
+    fig.text(0.91, 0.032, f"{n}", ha="right", va="center",
              fontsize=SMALL, color=C["t3"])
-    fig.text(0.075, 0.035, "PURSUIT-1", ha="left", va="center",
+    fig.text(0.09, 0.032, "PURSUIT-1", ha="left", va="center",
              fontsize=SMALL, color=C["t3"], weight="bold")
     return fig
 
 
 def kicker(fig, text, color):
-    fig.text(0.075, 0.935, text, fontsize=SMALL, color=color,
+    fig.text(0.09, 0.945, text, fontsize=SMALL, color=color,
              weight="bold", va="top")
 
 
-def head(fig, text, y=0.885, size=HEAD):
-    fig.text(0.075, y, text, fontsize=size, color=C["t1"],
-             weight="bold", va="top", linespacing=1.18)
+def head(fig, text, y=0.875, size=HEAD):
+    fig.text(0.09, y, text, fontsize=size, color=C["t1"],
+             weight="bold", va="top", linespacing=1.24)
 
 
 def body(fig, text, y, color=None, size=BODY, weight="normal"):
-    fig.text(0.075, y, text, fontsize=size, color=color or C["t2"],
-             va="top", linespacing=1.45, weight=weight)
+    fig.text(0.09, y, text, fontsize=size, color=color or C["t2"],
+             va="top", linespacing=1.52, weight=weight)
 
 
 def note(fig, text, color=C["warn"], y=0.045):
@@ -101,13 +111,13 @@ def note(fig, text, color=C["warn"], y=0.045):
     fixed, predictable box. Body text must end by y=0.21 or it collides with
     this — which it did, on five slides, until the grid was made explicit.
     """
-    ax = fig.add_axes([0.075, y, 0.85, 0.150]); ax.axis("off")
+    ax = fig.add_axes([0.09, y, 0.82, 0.142]); ax.axis("off")
     ax.add_patch(FancyBboxPatch((0, 0), 1, 1, transform=ax.transAxes,
                  boxstyle="round,pad=0.02,rounding_size=0.03",
-                 facecolor=C["card"], edgecolor=color, linewidth=2.4,
+                 facecolor=C["card"], edgecolor=color, linewidth=1.6,
                  clip_on=False))
-    ax.text(0.035, 0.5, text, transform=ax.transAxes, va="center",
-            fontsize=BODY*0.76, color=C["t1"], linespacing=1.45)
+    ax.text(0.045, 0.5, text, transform=ax.transAxes, va="center",
+            fontsize=BODY*0.74, color=C["t1"], linespacing=1.55)
 
 
 def panel(fig, rect):
@@ -178,220 +188,193 @@ def main() -> int:
     # ---------------------------------------------------------------- 01 --
     f = slide(1)
     kicker(f, "EMBEDDED ML  ·  COMPUTER VISION  ·  FLIGHT CONTROL", C["data"])
-    head(f, "I built a drone\nthat follows one\nspecific person.", 0.83, HERO)
-    body(f, "The printed circuit board IS the airframe.\n"
-            "No separate frame — the motors clamp into\nrings routed through the arms.",
-         0.465, C["t2"])
-    body(f, "92 mm  ·  66 g  ·  ESP32-S3\n"
-            f"{M['tests']['total']} tests  ·  MIT licensed",
-         0.295, C["t3"], BODY*0.90)
-    note(f, "It has never flown — the boards are not\n"
-            "fabricated yet. Everything here is measured\n"
-            "on the bench or in simulation.",
-         C["warn"])
+    head(f, "A 92 mm drone\nthat follows one\nenrolled person.", 0.83, HERO)
+    body(f, "The circuit board is the airframe. Flight firmware\n"
+            "runs on an ESP32-S3; perception runs off-board\n"
+            "on a laptop, over WiFi.", 0.45)
+    body(f, f"66 g   ·   {M['tests']['total']} tests   ·   MIT licensed",
+         0.265, C["t3"], BODY*0.90)
+    note(f, "Not yet flown. The boards are not fabricated.\n"
+            "Every number here is bench or simulation.", C["warn"])
     made.append(save(f, "01_hook.png"))
 
     # ---------------------------------------------------------------- 02 --
     f = slide(2)
-    kicker(f, "THE PROBLEM", C["ml"])
-    head(f, "Following a person\nis not detection.")
-    body(f, "A detector finds every person in frame.\n"
-            "Following needs the RIGHT one, held across\n"
-            "occlusion, motion blur and bad angles.", 0.72)
-    body(f, "So identity is two signals with different jobs:", 0.55, C["t1"],
-         BODY, "bold")
-    body(f, "FACE  acquires and re-confirms. Strict.\n"
-            "        ArcFace 512-d, threshold 0.36.\n\n"
-            "BODY  sustains between face frames.\n"
-            "        Re-ID 768-d — and it has to, because\n"
-            "        only 26% of frames carry a usable face.", 0.50, C["t2"], BODY*0.92)
-    note(f, "A readable face BELOW 0.15 is evidence\n"
-            "AGAINST. Without that veto, two people in\n"
-            "similar clothing swapped identity for good.", C["danger"])
-    made.append(save(f, "02_problem.png"))
+    kicker(f, "IDENTITY", C["ml"])
+    head(f, "Two signals,\ndifferent jobs.")
+    body(f, "Face acquires and re-confirms the lock.\n"
+            "ArcFace 512-d, cosine threshold 0.36.\n\n"
+            "Body re-identification sustains it between\n"
+            "face frames. 768-d embedding.\n\n"
+            "Only 26% of frames carry a usable face, so\n"
+            "the body signal is doing most of the work.", 0.63)
+    note(f, "A readable face scoring below 0.15 counts as\n"
+            "evidence against, not as missing evidence.", C["danger"])
+    made.append(save(f, "02_identity.png"))
 
     # ---------------------------------------------------------------- 03 --
-    v = verification_scores()
+    # Real training run, from ml/runs/history.json.
+    hist = None
+    hp = os.path.join(REPO, "ml", "runs", "history.json")
+    if os.path.exists(hp):
+        with open(hp) as fh:
+            hist = json.load(fh)
     f = slide(3)
-    kicker(f, "EVALUATION  —  DOES IT ACTUALLY SEPARATE?", C["ml"])
-    head(f, "I measured it\ninstead of trusting it.")
-    if v is not None:
-        pos, neg, nid = v
-        ax = panel(f, [0.115, 0.445, 0.80, 0.275])
-        bins = np.linspace(-0.25, 1.0, 42)
-        ax.hist(neg, bins=bins, color=C["danger"], alpha=0.80,
-                label=f"different person  (n={neg.size})")
-        ax.hist(pos, bins=bins, color=C["ok"], alpha=0.80,
-                label=f"same person  (n={pos.size})")
-        ax.axvline(0.36, color=C["data"], lw=3)
-        ax.text(0.345, ax.get_ylim()[1]*0.55, "0.36", rotation=90,
-                fontsize=SMALL, color=C["data"], weight="bold",
-                ha="right", va="center")
-        ax.set_xlabel("ArcFace cosine similarity", fontsize=BODY*0.8)
-        ax.set_ylabel("pairs", fontsize=BODY*0.8)
-        ax.legend(fontsize=SMALL, facecolor=C["raised"], edgecolor=C["hair"],
-                  labelcolor=C["t1"], loc="upper right")
-        gap = pos.min() - neg.max()
-        body(f, f"Separation  +{gap:.3f}   ·   no overlap   ·   AUC 1.000\n"
-                f"0 false accepts in {neg.size}   ·   0 false rejects in {pos.size}",
-             0.355, C["t1"], BODY*0.86, "bold")
-        note(f, f"Only {nid} identities, so the 95% CI on the\n"
-                f"false-accept rate is [0, 5.2%]. That is a\n"
-                f"statement about SAMPLE SIZE, not the model.", C["warn"])
-    else:
-        body(f, "Gallery absent — it is gitignored biometric data.", 0.6)
-    made.append(save(f, "03_separation.png"))
+    kicker(f, "TRAINING", C["data"])
+    head(f, "Trained an embedding\non 4,324 photographs.")
+    if hist:
+        h = hist["history"]
+        ax = panel(f, [0.13, 0.40, 0.78, 0.28])
+        ax.plot([r["epoch"] for r in h], [r["train_loss"] for r in h],
+                lw=2.2, color=C["data"], label="train")
+        ax.plot([r["epoch"] for r in h], [r["val_loss"] for r in h],
+                lw=2.2, color=C["warn"], label="validation")
+        ax.set_xlabel("epoch", fontsize=BODY*0.8)
+        ax.set_ylabel("cross-entropy", fontsize=BODY*0.8)
+        ax.legend(fontsize=SMALL)
+        d, mo, tr = hist["dataset"], hist["model"], hist["training"]
+        body(f, f"Labeled Faces in the Wild. {mo['params']:,} parameters,\n"
+                f"{mo['mb_fp32']} MB. {tr['epochs']} epochs, {tr['seconds']:.0f}s "
+                f"on an M4 GPU.", 0.335, C["t2"], BODY*0.86)
+    note(f, "Validation loss climbs for 34 epochs, then drops\n"
+            "as the cosine schedule decays the learning rate.", C["warn"])
+    made.append(save(f, "03_training.png"))
 
     # ---------------------------------------------------------------- 04 --
     f = slide(4)
-    kicker(f, "THE OPERATING POINT", C["ml"])
-    head(f, "The two errors are\nnot equally bad.")
-    body(f, "FALSE REJECT — miss one frame.\n"
-            "Costs nothing. Body re-ID carries the lock,\n"
-            "and acquisition needs 5 consecutive hits.", 0.70, C["ok"])
-    body(f, "FALSE ACCEPT — lock onto a stranger.\n"
-            "The drone follows the wrong person, and the\n"
-            "appearance model then REINFORCES the error.", 0.52, C["danger"])
-    body(f, "So the threshold buys a negligible false-accept\n"
-            "rate using false rejects, which are nearly free.\n"
-            "0.36 sits well above the 0.108 where accepts first\n"
-            "appear — deliberately conservative.", 0.345, C["t2"], BODY*0.92)
-    note(f, "A threshold is a DECISION. It should be\n"
-            "argued from measured error costs — which\n"
-            "is the part most projects skip.", C["data"])
-    made.append(save(f, "04_operating_point.png"))
+    kicker(f, "PROTOCOL", C["danger"])
+    head(f, "Split by identity,\nnot by image.")
+    if hist:
+        v = hist["verification"]
+        ax = panel(f, [0.28, 0.40, 0.62, 0.26])
+        vals = [v["seen_in_training"]["acc"] * 100, v["held_out"]["acc"] * 100]
+        ax.barh([1, 0], vals, color=[C["danger"], C["data"]], height=0.5)
+        ax.set_yticks([1, 0])
+        ax.set_yticklabels(["seen in\ntraining", "held\nout"], fontsize=SMALL)
+        ax.set_xlim(0, 108)
+        ax.set_xlabel("verification accuracy (%)", fontsize=BODY*0.8)
+        for yy, vv in zip([1, 0], vals):
+            ax.text(vv + 2, yy, f"{vv:.1f}%", va="center", fontsize=SMALL,
+                    color=C["t1"], weight="bold")
+        body(f, "127 people to train on. 31 held out and\n"
+                "never seen during training.", 0.335, C["t2"], BODY*0.86)
+    note(f, "Splitting by image leaves the same faces on both\n"
+            "sides. That is 16.6 points of inflation.", C["danger"])
+    made.append(save(f, "04_protocol.png"))
 
     # ---------------------------------------------------------------- 05 --
     f = slide(5)
-    kicker(f, "WHAT THE EVALUATION CAUGHT", C["danger"])
-    head(f, "My own dataset\nwas mislabelled.")
-    body(f, "Two identities enrolled: 'Paing' and 'alex'.", 0.70, C["t2"])
-    ax = panel(f, [0.10, 0.36, 0.82, 0.26])
-    vals = [0.579, 0.560]
-    ax.barh([1, 0], vals, color=[C["danger"], C["t3"]], height=0.55)
-    ax.set_yticks([1, 0])
-    ax.set_yticklabels(["Paing  vs  alex", "Paing  vs  Paing"], fontsize=SMALL)
-    ax.set_xlim(0, 0.72)
-    ax.set_xlabel("median cosine similarity", fontsize=BODY*0.8)
-    for i, val in zip([1, 0], vals):
-        ax.text(val + 0.012, i, f"{val:.3f}", va="center",
-                fontsize=SMALL, color=C["t1"], weight="bold")
-    body(f, "A stranger cannot resemble you more than you do.\n"
-            "'alex' was a placeholder enrolled from my own\n"
-            "webcam and never replaced.", 0.345, C["t2"], BODY*0.92)
-    note(f, "Every 'different person' pair was really the\n"
-            "same person. The first run reported a confident\n"
-            "AUC of 0.83 — fiction. Now it self-checks.",
-         C["danger"])
-    made.append(save(f, "05_bug.png"))
+    kicker(f, "BENCHMARK", C["ml"])
+    head(f, "136x the weights\nbuys 19 points.")
+    if hist:
+        ax = panel(f, [0.17, 0.40, 0.70, 0.27])
+        ax.bar(["mine\n1.3 MB", "ArcFace\n174 MB"], [77.3, 96.4],
+               color=[C["data"], C["t3"]], width=0.5)
+        ax.set_ylim(0, 112)
+        ax.set_ylabel("accuracy (%)", fontsize=BODY*0.8)
+        ax.tick_params(labelsize=SMALL)
+        for xx, vv in zip([0, 1], [77.3, 96.4]):
+            ax.text(xx, vv + 3, f"{vv:.1f}%", ha="center", fontsize=SMALL,
+                    color=C["t1"], weight="bold")
+        body(f, "Both scored on the same image pairs, from\n"
+                "identities neither model was trained on.",
+             0.335, C["t2"], BODY*0.86)
+    note(f, "ArcFace gets unaligned 62x47 crops here, which\n"
+            "understates it. Its published LFW figure is 99.8%.", C["t3"])
+    made.append(save(f, "05_benchmark.png"))
 
     # ---------------------------------------------------------------- 06 --
     q = M["quantisation"]["models"]
     f = slide(6)
-    kicker(f, "DEPLOYMENT  —  INT8 QUANTISATION", C["ctrl"])
-    head(f, "4x smaller.\nAnd slower.")
-    ax = panel(f, [0.13, 0.40, 0.79, 0.31])
+    kicker(f, "DEPLOYMENT", C["ctrl"])
+    head(f, "INT8 made it\n4x smaller and\n11% slower.")
+    ax = panel(f, [0.15, 0.335, 0.76, 0.24])
     names = [m["name"].split("_")[0] for m in q]
     y = np.arange(len(q))
-    ax.barh(y+0.19, [m["mb_fp32"] for m in q], 0.36, color=C["t3"], label="fp32")
-    ax.barh(y-0.19, [m["mb_int8"] for m in q], 0.36, color=C["ctrl"], label="int8")
+    ax.barh(y + 0.19, [m["mb_fp32"] for m in q], 0.34, color=C["t3"], label="fp32")
+    ax.barh(y - 0.19, [m["mb_int8"] for m in q], 0.34, color=C["ctrl"], label="int8")
     ax.set_yticks(y); ax.set_yticklabels(names, fontsize=SMALL)
     ax.set_xlabel("weights (MB)", fontsize=BODY*0.8)
-    ax.legend(fontsize=SMALL, facecolor=C["raised"], edgecolor=C["hair"],
-              labelcolor=C["t1"])
-    tot32 = sum(m["mb_fp32"] for m in q); tot8 = sum(m["mb_int8"] for m in q)
-    body(f, f"{tot32:.0f} MB  ->  {tot8:.0f} MB     ·     latency 0.89x  (WORSE)\n"
-            f"output agreement 0.976 – 0.999", 0.32, C["t1"], BODY*0.95, "bold")
-    note(f, "CoreML runs fp16 on the Neural Engine faster\n"
-            "than the CPU runs INT8. So here it is a memory\n"
-            "win and a latency LOSS. It would win on a Pi.",
-         C["warn"])
+    ax.legend(fontsize=SMALL)
+    note(f, "CoreML runs fp16 on the Neural Engine faster than\n"
+            "the CPU runs INT8. It would win on a Raspberry Pi.", C["warn"])
     made.append(save(f, "06_quantisation.png"))
 
     # ---------------------------------------------------------------- 07 --
     d = M["degradation"]
     f = slide(7)
-    kicker(f, "THE EXPERIMENT THAT CHANGED THE HARDWARE", C["data"])
-    head(f, "Noise is fine.\nBlur is fatal.")
-    ax = panel(f, [0.13, 0.40, 0.79, 0.30])
+    kicker(f, "MEASUREMENT", C["data"])
+    head(f, "Blur kills detection.\nNoise does not.")
+    ax = panel(f, [0.15, 0.395, 0.76, 0.27])
     ax.plot([p["px"] for p in d["motion_blur_px"]],
             [p["people"] for p in d["motion_blur_px"]],
-            "o-", lw=4, ms=13, color=C["danger"], label="motion blur (px)")
+            "o-", lw=2.6, ms=10, color=C["danger"], label="motion blur")
     ax.plot([0, 5, 9], [p["people"] for p in d["sensor_noise"]],
-            "s--", lw=4, ms=13, color=C["ok"], label="sensor noise (gain 1/2/4x)")
-    ax.set_ylim(-0.25, 2.5); ax.set_yticks([0, 1, 2])
+            "s--", lw=2.6, ms=10, color=C["data"], label="sensor noise")
+    ax.set_ylim(-0.3, 2.6); ax.set_yticks([0, 1, 2])
     ax.set_xlabel("degradation", fontsize=BODY*0.8)
-    ax.set_ylabel("people detected\n(of 2)", fontsize=BODY*0.8)
-    ax.legend(fontsize=SMALL, facecolor=C["raised"], edgecolor=C["hair"],
-              labelcolor=C["t1"], loc="lower left")
-    body(f, "YOLO keys on edges. Noise leaves them intact.\n"
-            "Blur destroys them. At 15 px of blur: zero people.", 0.32, C["t2"])
-    note(f, "So the camera now PREFERS a dark, noisy,\n"
-            "short-exposure frame. The old config capped\n"
-            "gain to avoid noise — exactly backwards.", C["ok"])
+    ax.set_ylabel("people found\n(of 2)", fontsize=BODY*0.8)
+    ax.legend(fontsize=SMALL, loc="lower left")
+    body(f, "At 15 px of blur the detector finds nobody.\n"
+            "At 4x gain it still finds both people.", 0.335, C["t2"], BODY*0.86)
+    note(f, "So the camera is set for short exposure and\n"
+            "accepts the sensor noise that comes with it.", C["ok"])
     made.append(save(f, "07_degradation.png"))
 
     # ---------------------------------------------------------------- 08 --
     L = M["lag_stability"]
     f = slide(8)
-    kicker(f, "CONTROL  —  THE RESULT THAT MATTERS", C["ctrl"])
-    head(f, "The loop closes\nthrough the airframe.")
-    ax = panel(f, [0.13, 0.38, 0.79, 0.30])
+    kicker(f, "CONTROL", C["ctrl"])
+    head(f, "The vision loop closes\nthrough the airframe.")
+    ax = panel(f, [0.15, 0.395, 0.76, 0.26])
     ax.plot([p["delay_ms"] for p in L["points"]],
             [p["no_comp"] for p in L["points"]],
-            "o-", lw=4, ms=12, color=C["danger"], label="uncompensated")
+            "o-", lw=2.6, ms=9, color=C["danger"], label="uncompensated")
     ax.plot([p["delay_ms"] for p in L["points"]],
             [p["with_comp"] for p in L["points"]],
-            "s-", lw=4, ms=12, color=C["ok"], label="attitude compensated")
-    ax.axvline(L["measured_rtt_ms"], color=C["data"], ls=":", lw=3)
+            "s-", lw=2.6, ms=9, color=C["data"], label="compensated")
+    ax.axvline(L["measured_rtt_ms"], color=C["t3"], ls=":", lw=2)
     ax.set_xlabel("link delay (ms)", fontsize=BODY*0.8)
     ax.set_ylabel("oscillation\n(deg p-p)", fontsize=BODY*0.8)
-    ax.legend(fontsize=SMALL, facecolor=C["raised"], edgecolor=C["hair"],
-              labelcolor=C["t1"], loc="upper left")
+    ax.legend(fontsize=SMALL, loc="upper left")
     body(f, "Pitching to chase moves the camera, which moves\n"
-            "where the subject appears. That path has gain\n"
-            f"34/26 = {L['loop_gain']} — above one.", 0.345, C["t2"], BODY*0.92)
-    note(f, f"Above unity, the correction overshoots the\n"
-            f"error that caused it. Uncompensated it rings at\n"
-            f"ONE frame — and the real RTT is {L['measured_rtt_ms']} ms.", C["danger"])
+            f"the subject in frame. Gain 34/26 = {L['loop_gain']}.",
+         0.335, C["t2"], BODY*0.86)
+    note(f, "Above 1, the correction overshoots. Uncompensated\n"
+            f"it rings at one frame; the real RTT is {L['measured_rtt_ms']} ms.",
+         C["danger"])
     made.append(save(f, "08_control.png"))
 
     # ---------------------------------------------------------------- 09 --
     f = slide(9)
-    kicker(f, "WHAT IS NOT DONE", C["warn"])
-    head(f, "It has never flown.")
-    body(f, "The boards are not fabricated. The PID gains are\n"
-            "scaled from typical values and have never touched\n"
-            "this airframe. The stability result above is a\n"
-            "simulation with ESTIMATED mass properties.", 0.72)
-    body(f, "Also true:", 0.53, C["t1"], BODY, "bold")
-    body(f, "·  nothing here was TRAINED — the models are\n"
-            "   pretrained; the work is evaluation and deployment\n"
-            "·  the two-person discrimination test has never\n"
-            "   actually been run on two real people\n"
-            "·  the face models are non-commercial research use", 0.45)
-    note(f, "I would rather you know the limits than\n"
-            "discover them. Everything claimed above is\n"
-            "measured. This slide is what is not.",
-         C["warn"])
-    made.append(save(f, "09_honest.png"))
+    kicker(f, "LIMITATIONS", C["warn"])
+    head(f, "What is not done.")
+    body(f, "The aircraft has never flown and the boards\n"
+            "are not fabricated.\n\n"
+            "PID gains are scaled from typical values, not\n"
+            "tuned on this airframe.\n\n"
+            "The stability result is simulated, with\n"
+            "estimated mass properties.\n\n"
+            "The two-person test has never been run on\n"
+            "two real people.", 0.70, C["t2"], BODY*0.94)
+    note(f, "Listed because the numbers on the other slides\n"
+            "are only worth anything if this slide exists.", C["warn"])
+    made.append(save(f, "09_limitations.png"))
 
     # ---------------------------------------------------------------- 10 --
     f = slide(10)
     kicker(f, "THE STACK", C["data"])
     head(f, "Built end to end.")
-    body(f, "PCB          generated from a Python netlist, with\n"
-            "                a 7-gate check that must pass before fab\n\n"
-            "FIRMWARE  ESP32-S3 from the IMU registers up:\n"
-            "                Madgwick, cascaded PID, mixer, watchdog\n\n"
-            "VISION      ONNX Runtime + CoreML, no torch:\n"
-            "                detect, track, re-identify, servo\n\n"
-            "PROTOCOL  generated from ONE source, so the two\n"
-            "                ends cannot drift. Checked in CI.", 0.70,
-         C["t2"], BODY*0.80)
-    body(f, f"{M['tests']['python']} Python + {M['tests']['native_cpp']} native C++ tests",
-         0.275, C["ok"], BODY*0.92, "bold")
-    note(f, "Full write-up, every measurement, the code:\n"
+    body(f, "Board       generated from a Python netlist,\n"
+            "                with a release check before fab\n\n"
+            "Firmware   ESP32-S3 from the IMU registers up\n\n"
+            "Vision      ONNX Runtime and CoreML, no torch\n\n"
+            "Protocol   generated from one source, so the\n"
+            "                two ends cannot drift", 0.68, C["t2"], BODY*0.88)
+    body(f, f"{M['tests']['python']} Python and "
+            f"{M['tests']['native_cpp']} native C++ tests",
+         0.245, C["t1"], BODY*0.92, "bold")
+    note(f, "Code, write-up and every measurement:\n"
             "github.com/Pai-88/pursuit-drone", C["data"])
     made.append(save(f, "10_stack.png"))
 
