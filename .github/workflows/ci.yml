@@ -114,6 +114,21 @@ jobs:
           fi
           echo "generated header matches protocol.py"
 
+  container:
+    name: docker — the reproducible environment actually builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        # Not verifiable on the development machine, which has no Docker
+        # daemon. Gating it here means the container is checked by something
+        # rather than asserted by the README.
+        run: docker build -t pursuit .
+      - name: Run the default entrypoint
+        # Tests + the flight simulation + a stability sweep, CPU-only, with no
+        # model weights present. Exits non-zero if any of it fails.
+        run: docker run --rm pursuit
+
   hygiene:
     name: hygiene — no secrets, no biometrics, no large blobs
     runs-on: ubuntu-latest

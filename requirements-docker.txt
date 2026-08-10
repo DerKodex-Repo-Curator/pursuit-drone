@@ -1,0 +1,22 @@
+# Pinned for reproducibility, to the versions the numbers in the README and in
+# docs/ were actually measured with. Read off the development venv with
+# importlib.metadata, not written from memory — an earlier draft of this file
+# guessed, and every pin in it was wrong (onnxruntime 1.23 for a real 1.28,
+# pytest 8.4 for 9.1, OpenCV 4.12 for 5.0). A pinned file that pins the wrong
+# versions is worse than an unpinned one: it looks reproducible and reproduces
+# something else.
+#
+# NOT pinned to the dev machine's interpreter. Development is Python 3.14 with
+# CoreML; the container is 3.12 on the CPU execution provider. Running the same
+# suite on a different interpreter and a different provider is the point — it
+# proves the code is not quietly tied to one machine.
+#
+# opencv-python-headless rather than opencv-python: the container has no
+# display, and the GUI build pulls in a long tail of X11 libraries to support
+# a window it will never open.
+numpy==2.5.1
+opencv-python-headless==5.0.0.93
+onnxruntime==1.28.0
+PyYAML==6.0.3
+matplotlib==3.11.1
+pytest==9.1.1
