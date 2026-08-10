@@ -64,3 +64,9 @@ Thumbs.db
 # The SoftAP passphrase. Anything joined to the drone's network can send it
 # flight commands, so this is a real credential, not a formality.
 firmware/include/secrets.h
+
+# ---------------------------------------------------------------- training --
+# The venv and the model checkpoint. history.json and eval.npz ARE tracked —
+# they are the evidence, and they are small.
+ml/.venv/
+ml/runs/*.pt

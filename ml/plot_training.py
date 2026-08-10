@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+"""Plot the real training run, and benchmark it against the pretrained ArcFace.
+
+    ml/.venv/bin/python ml/plot_training.py
+
+Produces two figures from `ml/runs/history.json` and `ml/runs/eval.npz`:
+
+  training_curves.png   loss and accuracy per epoch — the actual run
+  verification_bench.png ROC of the trained model against ArcFace, on the
+                        SAME pairs, plus the protocol comparison
+
+Nothing here is illustrative. Every point is from the run recorded in
+ml/runs/, and the ArcFace numbers are computed live on the same image pairs.
+"""
+from __future__ import annotations
+
+import json
+import os
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(ROOT)
+RUNS = os.path.join(ROOT, "runs")
+OUT = os.path.join(REPO, "docs", "media")
+
+C = dict(bg="#0B0E14", card="#161C29", hair="#2A3346", t1="#E8ECF4",
+         t2="#94A1B8", t3="#6B7A94", data="#5B9CFF", ml="#A78BFA",
+         ok="#3DD68C", warn="#F2B441", danger="#F2545B")
+
+plt.rcParams.update({
+    "font.family": "sans-serif", "font.sans-serif": ["Inter", "DejaVu Sans"],
+    "text.color": C["t1"], "axes.labelcolor": C["t2"],
+    "xtick.color": C["t3"], "ytick.color": C["t3"],
+    "axes.edgecolor": C["hair"], "figure.facecolor": C["bg"],
+    "axes.facecolor": C["card"], "savefig.facecolor": C["bg"],
+})
+
+
+def style(ax):
+    for s in ax.spines.values():
+        s.set_color(C["hair"])
+    ax.grid(alpha=0.16, color=C["t3"], lw=0.9)
+    ax.set_axisbelow(True)
+    return ax
+
+
+def arcface_on_same_pairs(pairs, labels):
+    """Score the SAME image pairs with the pretrained ArcFace.
+
+    Caveat stated plainly: ArcFace expects 112x112 faces aligned by five
+    landmarks. These are 62x47 LFW crops upscaled, with no landmark
+    alignment, so this UNDERSTATES ArcFace — its published LFW number is
+    99.8% under the proper protocol. It is still the right comparison to
+    show, because it is the same input both models get.
+    """
+    try:
+        import cv2
+        import onnxruntime as ort
+        from sklearn.datasets import fetch_lfw_people
+    except ImportError as e:
+        print(f"  (ArcFace comparison skipped: {e})")
+        return None
+
+    path = os.path.join(REPO, "vision", "models", "buffalo_l", "w600k_r50.onnx")
+    if not os.path.exists(path):
+        print("  (ArcFace comparison skipped: weights not fetched)")
+        return None
+
+    d = fetch_lfw_people(min_faces_per_person=10, resize=0.5, color=True)
+    imgs = (d.images * 255).astype(np.uint8)
+
+    opts = ort.SessionOptions(); opts.log_severity_level = 3
+    sess = ort.InferenceSession(path, opts, providers=["CPUExecutionProvider"])
+    iname = sess.get_inputs()[0].name
+
+    need = sorted({int(i) for p in pairs for i in p})
+    emb = {}
+    B = 64
+    for s in range(0, len(need), B):
+        chunk = need[s:s+B]
+        batch = np.stack([
+            cv2.resize(imgs[i], (112, 112), interpolation=cv2.INTER_CUBIC)
+            for i in chunk]).astype(np.float32)
+        batch = (batch - 127.5) / 127.5
+        batch = np.transpose(batch, (0, 3, 1, 2))
+        out = sess.run(None, {iname: np.ascontiguousarray(batch)})[0]
+        out /= np.maximum(np.linalg.norm(out, axis=1, keepdims=True), 1e-12)
+        for k, i in enumerate(chunk):
+            emb[i] = out[k]
+
+    s = np.array([float(emb[int(a)] @ emb[int(b)]) for a, b in pairs])
+    order = np.argsort(-s); ls = labels[order]
+    tpr = np.cumsum(ls) / max(labels.sum(), 1)
+    fpr = np.cumsum(1 - ls) / max((1 - labels).sum(), 1)
+    auc = float(np.trapezoid(tpr, fpr))
+    ths = np.linspace(-1, 1, 401)
+    acc = max(float(((s >= t) == labels).mean()) for t in ths)
+    return dict(fpr=fpr, tpr=tpr, auc=auc, acc=acc)
+
+
+def main() -> int:
+    with open(os.path.join(RUNS, "history.json")) as f:
+        H = json.load(f)
+    E = np.load(os.path.join(RUNS, "eval.npz"))
+    h = H["history"]
+    ep = [r["epoch"] for r in h]
+
+    # ------------------------------------------------------- training curves --
+    fig, (a1, a2) = plt.subplots(2, 1, figsize=(11, 9), sharex=True)
+    style(a1); style(a2)
+
+    a1.plot(ep, [r["train_loss"] for r in h], lw=2.6, color=C["data"], label="train")
+    a1.plot(ep, [r["val_loss"] for r in h], lw=2.6, color=C["warn"], label="validation")
+    a1.set_ylabel("cross-entropy loss")
+    a1.legend(facecolor=C["card"], edgecolor=C["hair"], labelcolor=C["t1"])
+    d = H["dataset"]; m = H["model"]; t = H["training"]
+    a1.set_title(
+        f"Face embedding trained from scratch on {d['images']:,} real LFW "
+        f"photographs\n{m['params']:,} parameters ({m['mb_fp32']} MB) · "
+        f"{t['epochs']} epochs · {t['seconds']}s on {t['device'].upper()} · "
+        f"seed {t['seed']}", fontsize=11.5, color=C["t1"])
+
+    a2.plot(ep, [r["train_acc"] for r in h], lw=2.6, color=C["data"], label="train")
+    a2.plot(ep, [r["val_acc"] for r in h], lw=2.6, color=C["warn"], label="validation")
+    a2.set_xlabel("epoch"); a2.set_ylabel(f"identity accuracy\n({d['train_identities']}-way)")
+    a2.legend(facecolor=C["card"], edgecolor=C["hair"], labelcolor=C["t1"])
+
+    # The honest annotation: validation went WORSE before it got better.
+    vl = [r["val_loss"] for r in h]
+    worst = int(np.argmax(vl))
+    if worst > 2:
+        a1.annotate("validation loss rises for ~30 epochs\nbefore the "
+                    "representation generalises",
+                    xy=(ep[worst], vl[worst]),
+                    xytext=(ep[worst] + 2, max(vl) * 0.93),
+                    arrowprops=dict(arrowstyle="->", color=C["t3"]),
+                    fontsize=9.5, color=C["t3"])
+
+    fig.tight_layout()
+    p1 = os.path.join(OUT, "training_curves.png")
+    fig.savefig(p1, dpi=140); plt.close(fig)
+
+    # -------------------------------------------------- verification benchmark --
+    fig, (b1, b2) = plt.subplots(1, 2, figsize=(13, 6))
+    style(b1); style(b2)
+
+    v = H["verification"]
+    b1.plot(E["te_fpr"], E["te_tpr"], lw=3, color=C["ok"],
+            label=f"held-out identities   AUC {v['held_out']['auc']:.3f}")
+    b1.plot(E["tr_fpr"], E["tr_tpr"], lw=3, ls="--", color=C["danger"],
+            label=f"identities seen in training   AUC {v['seen_in_training']['auc']:.3f}")
+
+    pairs = None
+    af = None
+    try:
+        # Rebuild the exact held-out pairs to score ArcFace on them.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "tfe", os.path.join(ROOT, "train_face_embed.py"))
+        tfe = importlib.util.module_from_spec(spec); spec.loader.exec_module(tfe)
+        rng = np.random.default_rng(tfe.SEED)
+        X, y, names, tr, te, tr_ids, te_ids = tfe.load_identity_split(rng)
+        # burn the same draws the training script made, so the pairs match
+        _ = rng.permutation(len(tr))
+        pairs, lab = tfe.make_pairs(y, te, rng)
+        af = arcface_on_same_pairs(pairs, lab)
+    except Exception as exc:
+        print(f"  (ArcFace comparison skipped: {exc})")
+
+    if af:
+        b1.plot(af["fpr"], af["tpr"], lw=3, color=C["ml"],
+                label=f"ArcFace, pretrained   AUC {af['auc']:.3f}")
+    b1.plot([0, 1], [0, 1], lw=1.2, ls=":", color=C["t3"])
+    b1.set_xlabel("false accept rate"); b1.set_ylabel("true accept rate")
+    b1.set_title("Verification ROC — identical image pairs", fontsize=11.5)
+    b1.legend(facecolor=C["card"], edgecolor=C["hair"], labelcolor=C["t1"],
+              fontsize=9.5, loc="lower right")
+
+    # size vs accuracy
+    labels = ["mine\n(trained here)", "ArcFace\n(pretrained)"]
+    sizes = [m["mb_fp32"], 174.4]
+    accs = [v["held_out"]["acc"] * 100, (af["acc"] * 100) if af else np.nan]
+    cols = [C["ok"], C["ml"]]
+    bars = b2.bar(labels, accs, color=cols, width=0.55)
+    for bar, s, a in zip(bars, sizes, accs):
+        if np.isfinite(a):
+            b2.text(bar.get_x() + bar.get_width()/2, a + 1.5,
+                    f"{a:.1f}%\n{s:.1f} MB", ha="center", fontsize=11,
+                    color=C["t1"], weight="bold")
+    b2.set_ylim(0, 108); b2.set_ylabel("verification accuracy (%)")
+    b2.set_title(f"{sizes[1]/sizes[0]:.0f}x the size — what does it buy?",
+                 fontsize=11.5)
+
+    fig.suptitle("Held-out identities only. ArcFace is scored on the same "
+                 "unaligned 62x47 crops,\nwhich understates it — its published "
+                 "LFW figure is 99.8% with proper alignment.",
+                 fontsize=10, color=C["t3"], y=0.02)
+    fig.tight_layout(rect=[0, 0.06, 1, 1])
+    p2 = os.path.join(OUT, "verification_bench.png")
+    fig.savefig(p2, dpi=140); plt.close(fig)
+
+    print(f"wrote {os.path.relpath(p1, REPO)}")
+    print(f"wrote {os.path.relpath(p2, REPO)}")
+    if af:
+        print(f"\nArcFace on the same pairs: AUC {af['auc']:.4f}, "
+              f"acc {af['acc']*100:.1f}%")
+        print(f"Mine:                      AUC {v['held_out']['auc']:.4f}, "
+              f"acc {v['held_out']['acc']*100:.1f}%  "
+              f"({m['mb_fp32']} MB vs 174.4 MB)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
