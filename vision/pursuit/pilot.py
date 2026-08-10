@@ -240,12 +240,47 @@ PROFILES = [
                deadman_full_scale=1023, deadman_thresh=0.35,
                mode_byte=14, mode_manual=0x01, mode_assist=0x02,
                mode_follow=0x10),
+    # MEASURED on a real DualSense over USB, 2026-08-10, then VERIFIED by
+    # moving each control one at a time — not from a descriptor. 64-byte
+    # report at ~200 Hz, report id 0x01. Observed, at rest and at full travel:
+    #
+    #   right stick up    byte 4  127 -> 0      left stick up   byte 2 125 -> 0
+    #   right stick right byte 3  130 -> 188    left stick X    byte 1 130 -> 86
+    #   R2 squeezed       byte 6    0 -> 255    L2 squeezed     byte 5   0 -> 255
+    #
+    # Two traps found doing this. Bytes 16-19 are the controller's own gyro
+    # and accelerometer: they stream 0..255 continuously, even sitting still,
+    # and swamp any naive 'which byte changed' search. Byte 7 is the report
+    # sequence counter and does the same. Both must be excluded before the
+    # sticks are visible at all.
+    #
+    # Sticks report UP as ZERO, hence invert_pitch / invert_throttle.
+    #
+    # Original layout notes below:
+    #
+    #   byte 1  left  stick X  127     byte 5  L2 trigger  0
+    #   byte 2  left  stick Y  129     byte 6  R2 trigger  0
+    #   byte 3  right stick X  130     byte 8  d-pad + face buttons
+    #   byte 4  right stick Y  125     byte 9  shoulder + stick clicks
+    #
+    # The previous version of this profile had the two STICKS SWAPPED: it put
+    # roll and pitch on the left stick. RC mode 2 — which is what anyone who
+    # has flown a quad expects — is throttle and yaw on the LEFT, pitch and
+    # roll on the RIGHT. Flying it the other way round is how you crash a
+    # first flight while your hands do the right thing.
+    #
+    # Deadman on R2: analogue, springs back on its own, and your finger is
+    # already there. That was correct in the old profile and is kept.
     PadProfile("DualSense (PS5)", 0x054C, (0x0CE6, 0x0DF2),
-               axis_roll=1, axis_pitch=2, axis_yaw=3, axis_throttle=4,
+               axis_yaw=1, axis_throttle=2,      # left stick
+               axis_roll=3, axis_pitch=4,        # right stick
                axis_bits=8,
                deadman_axis=6, deadman_axis_bits=8, deadman_full_scale=255,
                deadman_thresh=0.35,
-               mode_byte=9, mode_manual=0x20, mode_assist=0x40,
+               # Face buttons live in the HIGH nibble of byte 8 (the low
+               # nibble is the d-pad hat, which reads 8 when centred).
+               # Square = MANUAL, Cross = ASSIST, Triangle = FOLLOW.
+               mode_byte=8, mode_manual=0x10, mode_assist=0x20,
                mode_follow=0x80),
     PadProfile("DualShock 4", 0x054C, (0x09CC, 0x05C4),
                axis_roll=1, axis_pitch=2, axis_yaw=3, axis_throttle=4,
