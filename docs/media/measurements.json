@@ -1,0 +1,77 @@
+{
+  "_README": [
+    "Measured results, with the tool and date that produced each. This file",
+    "exists so figures are generated from recorded numbers rather than from",
+    "numbers retyped into a slide, which is how a deck drifts from the truth.",
+    "",
+    "Cheap measurements are recomputed live by the figure script. The ones",
+    "here are the expensive ones (minutes of model loading) or the ones that",
+    "need data that is gitignored. Re-run the named tool to refresh them.",
+    "",
+    "NOTHING IN THIS PROJECT IS TRAINED. There is no loss curve because there",
+    "was no training run. These are evaluation and deployment measurements."
+  ],
+
+  "quantisation": {
+    "_tool": "vision/tools/quantize.py --runs 15",
+    "_date": "2026-08-10",
+    "_host": "Apple M4, ONNX Runtime 1.28.0, CoreML EP available",
+    "_note": "fp32_best uses CoreML where the graph loads; int8 is CPU-only because ORT has no INT8 CoreML path",
+    "models": [
+      { "name": "yolo11n",           "role": "person detection", "mb_fp32": 10.9,  "mb_int8": 3.2,  "ms_fp32_best": 30.8, "ms_fp32_cpu": 18.1, "ms_int8_cpu": 20.6, "agreement": 0.99927 },
+      { "name": "scrfd_det_10g",     "role": "face detection",   "mb_fp32": 16.9,  "mb_int8": 4.3,  "ms_fp32_best": 31.3, "ms_fp32_cpu": 35.1, "ms_int8_cpu": 39.7, "agreement": 0.99860 },
+      { "name": "arcface_w600k_r50", "role": "face embedding",   "mb_fp32": 174.4, "mb_int8": 43.8, "ms_fp32_best": 2.0,  "ms_fp32_cpu": 21.1, "ms_int8_cpu": 22.5, "agreement": 0.97623 },
+      { "name": "person_reid",       "role": "body re-id",       "mb_fp32": 106.9, "mb_int8": 27.1, "ms_fp32_best": 1.1,  "ms_fp32_cpu": 11.6, "ms_int8_cpu": 13.1, "agreement": 0.99942 }
+    ]
+  },
+
+  "degradation": {
+    "_tool": "vision/tools/degradation_sweep.py",
+    "_date": "2026-08-06",
+    "_note": "reference image contains 2 people; 'people' is how many YOLO11n still finds",
+    "_finding": "noise is survivable, blur is fatal — which inverted the camera configuration",
+    "motion_blur_px": [
+      { "px": 0,  "people": 2 },
+      { "px": 5,  "people": 2 },
+      { "px": 9,  "people": 2 },
+      { "px": 15, "people": 0 }
+    ],
+    "sensor_noise": [
+      { "gain": 1.0, "sigma": 0,  "people": 2 },
+      { "gain": 2.0, "sigma": 16, "people": 2 },
+      { "gain": 4.0, "sigma": 28, "people": 2 }
+    ]
+  },
+
+  "latency": {
+    "_tool": "vision/run.py --headless, per-frame means",
+    "_date": "2026-08-05",
+    "_note": "face stage runs on ~26% of frames, so its contribution to the mean is amortised",
+    "mean_ms_per_frame": 38.7,
+    "stages": [
+      { "name": "detect + track", "ms": 18.3, "every_frame": true },
+      { "name": "face (SCRFD + ArcFace)", "ms": 20.4, "every_frame": false, "cadence": 0.26 },
+      { "name": "body re-id", "ms": 1.1, "every_frame": true },
+      { "name": "lock + control", "ms": 0.4, "every_frame": true }
+    ]
+  },
+
+  "lag_stability": {
+    "_tool": "python sim/flight/lag_sweep.py",
+    "_date": "2026-08-10",
+    "_note": "residual oscillation, degrees peak-to-peak, after the subject stops moving",
+    "loop_gain": 1.31,
+    "measured_rtt_ms": 20,
+    "points": [
+      { "delay_ms": 0,   "no_comp": 0.0,  "with_comp": 0.00 },
+      { "delay_ms": 17,  "no_comp": 7.6,  "with_comp": 0.00 },
+      { "delay_ms": 51,  "no_comp": 15.8, "with_comp": 0.04 },
+      { "delay_ms": 85,  "no_comp": 22.3, "with_comp": 0.00 },
+      { "delay_ms": 119, "no_comp": 27.6, "with_comp": 0.00 },
+      { "delay_ms": 153, "no_comp": 31.1, "with_comp": 0.05 },
+      { "delay_ms": 187, "no_comp": 33.3, "with_comp": 0.00 }
+    ]
+  },
+
+  "tests": { "python": 207, "native_cpp": 85, "total": 292 }
+}
