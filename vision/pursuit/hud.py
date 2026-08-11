@@ -173,13 +173,18 @@ def _corner_box(img, xyxy, colour, thick=1, frac=0.22):
                      cv2.LINE_AA)
 
 
-def _spotlight(img, xyxy, keep=0.38, pad=18):
+def _spotlight(img, xyxy, keep=0.52, pad=18):
     """Darken everything except the locked subject.
 
     The most important fact on screen is which person the aircraft has, and a
     coloured bracket competes with every other bracket for attention. Light
     does not compete — it is pre-attentive. One full-frame scale plus one ROI
     copy, well under a millisecond at 720p.
+
+    `keep` is a RATIO, so how much of the background survives depends on how
+    much there was. At 0.38 a well-lit room still reads; a dim one goes to
+    black and you lose the scene entirely, which is worse than not having the
+    effect. 0.52 keeps the subject clearly separated in both. [s] turns it off.
     """
     x1, y1, x2, y2 = (int(round(v)) for v in xyxy)
     h, w = img.shape[:2]
@@ -429,6 +434,13 @@ class Hud:
         # fitted (ALT_CEILING_BARO_M). Shown so the limit is visible in the
         # air rather than discovered by hitting it.
         self.alt_ceiling = 9.5
+        # Display aspect (width/height) to pad the canvas out to, or None.
+        # Set by the runner once it knows the screen, so a full-screen window
+        # is filled with THIS module's chrome rather than with whatever grey
+        # the window manager pads a letterbox with — and without stretching
+        # the picture to get there, which would put the aim point and the
+        # error vector out of proportion with the video they are drawn over.
+        self.fill_aspect: float | None = None
         self._trail: list[tuple[int, int]] = []
         self._conf: list[float] = []
         self._acq = 1.0             # bracket convergence, 0..1
@@ -744,10 +756,11 @@ class Hud:
         # --- key hints ------------------------------------------------------
         if arbiter is not None:
             keys = ("[1] manual   [2] assist   [3] follow   "
-                    "hold SPACE deadman   wasd/qe/ik fly   [x] quit")
+                    "hold SPACE deadman   wasd/qe/ik fly   "
+                    "[f] fullscreen   [s] spotlight   [x] quit")
         else:
             keys = ("[space] arm   [r] reset lock   [t] tracks   "
-                    "[p] pause   [q] quit")
+                    "[f] fullscreen   [s] spotlight   [p] pause   [q] quit")
         cv2.line(deck, (0, DECK_H - 22), (w, DECK_H - 22), RULE, 1)
         _label(deck, keys, (16, DECK_H - 7), DIM, 0.32, 1)
 
@@ -783,6 +796,8 @@ class Hud:
 
         h, w = video.shape[:2]
         cw = max(w, CANVAS_MIN_W)
+        if self.fill_aspect:
+            cw = max(cw, int(round((HEAD_H + h + DECK_H) * self.fill_aspect)))
         xo = (cw - w) // 2
         canvas = np.full((HEAD_H + h + DECK_H, cw, 3), INK, np.uint8)
         canvas[HEAD_H:HEAD_H + h, xo:xo + w] = video

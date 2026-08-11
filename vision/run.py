@@ -37,6 +37,41 @@ from pursuit.pilot import KeyboardPilot, make_pilot             # noqa: E402
 from pursuit.pipeline import Pipeline                           # noqa: E402
 
 
+def screen_aspect() -> float | None:
+    """Width/height of the display, for padding a full-screen canvas.
+
+    OpenCV cannot answer this and asking it is actively misleading:
+    `getWindowImageRect` reports the IMAGE it was last given, not the window.
+    Measured on this machine, a 1952x1268 image in a full-screen window
+    reports back exactly (0, 0, 1952, 1268) — so deriving the screen aspect
+    from it is circular, hands back the aspect you already had, and the
+    padding silently does nothing. That bug shipped once already.
+    """
+    import re
+    import subprocess
+    if sys.platform == "darwin":
+        try:
+            out = subprocess.run(["system_profiler", "SPDisplaysDataType"],
+                                 capture_output=True, text=True,
+                                 timeout=10).stdout
+            # First match is the built-in panel on a laptop. Multi-monitor
+            # setups should pass --aspect rather than hope.
+            m = re.search(r"Resolution:\s*(\d+)\s*x\s*(\d+)", out)
+            if m and int(m.group(2)):
+                return int(m.group(1)) / int(m.group(2))
+        except Exception:
+            pass
+    try:
+        import tkinter
+        root = tkinter.Tk()
+        root.withdraw()
+        a = root.winfo_screenwidth() / max(root.winfo_screenheight(), 1)
+        root.destroy()
+        return a
+    except Exception:
+        return None
+
+
 def open_source(cfg: Config, source: str | None):
     # In flight the frames arrive as an MJPEG stream from the drone's own
     # camera, not from a local device, so a configured URL wins over the
@@ -49,7 +84,16 @@ def open_source(cfg: Config, source: str | None):
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, cfg.source.width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg.source.height)
         cap.set(cv2.CAP_PROP_FPS, cfg.source.fps)
-        label = f"camera {cfg.source.camera}"
+        # A camera silently gives you the nearest mode it has rather than
+        # refusing, so ASK is not GOT. Reporting both means a request for
+        # 1080p that quietly landed on 720p is visible here instead of being
+        # discovered later as "why does this look soft".
+        got_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        got_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        label = f"camera {cfg.source.camera}  {got_w}x{got_h}"
+        if (got_w, got_h) != (cfg.source.width, cfg.source.height):
+            label += (f"  (asked {cfg.source.width}x{cfg.source.height} — "
+                      f"camera has no such mode)")
         live = True
     elif source.startswith(("http://", "https://", "rtsp://", "udp://")):
         cap = cv2.VideoCapture(source)
@@ -84,6 +128,17 @@ def main() -> int:
                     default=None)
     ap.add_argument("--port", type=int, default=None)
     ap.add_argument("--headless", action="store_true", help="no preview window")
+    ap.add_argument("--res", metavar="WxH",
+                    help="capture resolution, e.g. 1920x1080 (default "
+                         "1280x720). The detector letterboxes to 640 either "
+                         "way, so this buys a sharper PICTURE, not better "
+                         "detection")
+    ap.add_argument("--fullscreen", action="store_true",
+                    help="open the preview full screen ([f] toggles)")
+    ap.add_argument("--aspect", metavar="W:H",
+                    help="force the full-screen canvas aspect, e.g. 16:10. "
+                         "Only needed when the screen is auto-detected wrong "
+                         "— a second monitor, or a scaled resolution")
     ap.add_argument("--record", metavar="PATH", help="write annotated video")
     ap.add_argument("--max-frames", type=int, default=0,
                     help="stop after N frames (for scripted checks)")
@@ -99,6 +154,12 @@ def main() -> int:
     if args.port:
         cfg.link.port = args.port
     cfg.link.enabled = args.link
+    if args.res:
+        try:
+            w_s, h_s = args.res.lower().split("x")
+            cfg.source.width, cfg.source.height = int(w_s), int(h_s)
+        except ValueError:
+            raise SystemExit(f"--res wants WxH, e.g. 1920x1080 (got {args.res})")
 
     cap, label, live = open_source(cfg, args.source)
     pipe = Pipeline(cfg, target_name=args.target)
@@ -117,6 +178,36 @@ def main() -> int:
     hud = (Hud(aim_bias=cfg.control.aim_y_bias)
            if (not args.headless or args.record) else None)
 
+    WINDOW = "PURSUIT-1"
+    if hud is not None and not args.headless:
+        # WINDOW_NORMAL, not the default AUTOSIZE: autosize locks the window
+        # to the pixel size of the image, so it can be neither resized nor
+        # made full screen.
+        #
+        # Deliberately WITHOUT KEEPRATIO. Keeping the ratio makes the window
+        # manager letterbox a full-screen window with its own grey, which is
+        # a band of somebody else's colour down the side of the instrument.
+        # Instead the screen is measured once and the HUD pads its own canvas
+        # out to that aspect in its own chrome — so the window is filled
+        # exactly, with no stretch, and the padding belongs to the design.
+        cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
+        if args.fullscreen:
+            cv2.setWindowProperty(WINDOW, cv2.WND_PROP_FULLSCREEN,
+                                  cv2.WINDOW_FULLSCREEN)
+
+    fullscreen = bool(args.fullscreen)
+    if args.aspect:
+        try:
+            a_w, a_h = args.aspect.replace("/", ":").split(":")
+            fill = float(a_w) / float(a_h)
+        except (ValueError, ZeroDivisionError):
+            raise SystemExit(f"--aspect wants W:H, e.g. 16:10 (got {args.aspect})")
+    else:
+        fill = screen_aspect() if fullscreen else None
+    if hud is not None and fullscreen:
+        hud.fill_aspect = fill
+        print(f"screen:  {'%.4f' % fill if fill else 'unknown'} aspect"
+              f"{'' if fill else ' — pass --aspect W:H if a band shows'}")
     writer = None
     armed = False
     paused = False
@@ -193,7 +284,7 @@ def main() -> int:
                     writer.write(view)
 
             if hud is not None and not args.headless:
-                cv2.imshow("PURSUIT-1", view)
+                cv2.imshow(WINDOW, view)
 
                 key = cv2.waitKey(1) & 0xFF
                 # The keyboard pilot needs every key press, including SPACE
@@ -215,6 +306,21 @@ def main() -> int:
                     print("  lock reset")
                 if key == ord("t"):
                     hud.show_all_tracks = not hud.show_all_tracks
+                if key == ord("f"):
+                    fullscreen = not fullscreen
+                    cv2.setWindowProperty(
+                        WINDOW, cv2.WND_PROP_FULLSCREEN,
+                        cv2.WINDOW_FULLSCREEN if fullscreen
+                        else cv2.WINDOW_NORMAL)
+                    # Pad to the screen going in; drop the padding coming
+                    # out, or a windowed preview keeps a screen's worth of
+                    # empty chrome down both sides.
+                    hud.fill_aspect = fill if fullscreen else None
+                if key == ord("s"):
+                    # The spotlight is the right default, but it costs you the
+                    # background — and in a dark room the background is most
+                    # of what there is to see.
+                    hud.spotlight = not hud.spotlight
                 if key == ord("p"):
                     paused = not paused
 
