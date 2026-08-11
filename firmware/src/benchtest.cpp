@@ -6,6 +6,7 @@
 #include <cmath>
 
 #include "battery.h"
+#include "bmp390.h"
 #include "config.h"
 #include "flight_state.h"
 #include "icm42688.h"
@@ -246,6 +247,47 @@ void bench_update(uint32_t now_ms, const BenchDeps &d)
                                                   "flying)" : "");
         Serial.printf("  rangefinder %s\n",
                       d.tof->available() ? "OK" : "absent (no altitude hold)");
+        if (d.baro && d.baro->present()) {
+            /* Report the SPREAD over a second, not one reading. The absolute
+             * pressure altitude is meaningless — it moves tens of metres with
+             * the weather and the fusion filter subtracts it anyway. What
+             * matters on a bench is how much the number wanders, because
+             * that noise is what the altitude loop will be chasing. Run this
+             * once with the props still, then again with them spinning: if
+             * the spread grows, the foam is not doing its job. */
+            float lo = 1e9f, hi = -1e9f, sum = 0.0f;
+            int n = 0;
+            const uint32_t until = millis() + 1000;
+            while ((int32_t)(millis() - until) < 0) {
+                Bmp390Sample b = d.baro->read();
+                if (b.valid) {
+                    if (b.altitude_m < lo) lo = b.altitude_m;
+                    if (b.altitude_m > hi) hi = b.altitude_m;
+                    sum += b.altitude_m;
+                    n++;
+                }
+                delay(5);
+            }
+            if (n > 0) {
+                Serial.printf("  barometer  OK @0x%02X   %d samples/s, "
+                              "%.2fm spread\n",
+                              d.baro->address(), n, hi - lo);
+                Serial.printf("             mean %.1fm (pressure altitude — "
+                              "absolute value is meaningless)\n", sum / n);
+                if (hi - lo > 1.0f) {
+                    Serial.println("             SPREAD TOO WIDE: cover the "
+                                   "port with open-cell foam, and keep light "
+                                   "off it");
+                }
+            } else {
+                Serial.println("  barometer  PRESENT BUT SILENT — probed OK "
+                               "and returns no conversions");
+            }
+        } else {
+            Serial.printf("  barometer  absent (%s) — ceiling %.1fm\n",
+                          d.baro ? d.baro->last_error() : "not wired",
+                          ALT_CEILING_TOF_M);
+        }
         bench_print_loop_timing();
         Serial.println("---------------------\n");
         g_mode = Mode::Off;

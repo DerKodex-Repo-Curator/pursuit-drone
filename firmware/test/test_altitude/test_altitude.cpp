@@ -223,6 +223,53 @@ void test_survives_degenerate_dt(void)
     TEST_ASSERT_FALSE(std::isnan(alt.update(nan_v, 1.0f, true, 0.6f, DT)));
 }
 
+/* --------------------------------------------------- commanded ceiling */
+
+/* The numbers from config.h. Repeated rather than included because config.h
+ * is board wiring and this is a host build; the point of the tests is the
+ * BEHAVIOUR at a ceiling, not the particular metres. */
+static constexpr float CEIL_TOF = 2.50f;
+static constexpr float CEIL_BARO = 9.50f;
+
+void test_without_a_barometer_the_ceiling_is_the_rangefinder(void)
+{
+    /* The failure this prevents is quiet: with no barometer, a climb past
+     * ~3.5m loses the floor and altitude hold degrades to open-loop throttle
+     * rather than to an error, so the aircraft simply drifts off at whatever
+     * height it stopped being able to see. */
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, CEIL_TOF,
+        pursuit_clamp_alt_setpoint(9.0f, false, CEIL_TOF, CEIL_BARO));
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, CEIL_TOF,
+        pursuit_clamp_alt_setpoint(100.0f, false, CEIL_TOF, CEIL_BARO));
+}
+
+void test_with_a_barometer_thirty_feet_is_allowed(void)
+{
+    /* 30 ft is 9.14m — the number this whole sensor was fitted for. */
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 9.14f,
+        pursuit_clamp_alt_setpoint(9.14f, true, CEIL_TOF, CEIL_BARO));
+}
+
+void test_a_reachable_setpoint_passes_through_untouched(void)
+{
+    const float reachable[] = {0.0f, 0.4f, 1.2f, 2.5f};
+    for (float m : reachable)
+        TEST_ASSERT_FLOAT_WITHIN(1e-4f, m,
+            pursuit_clamp_alt_setpoint(m, false, CEIL_TOF, CEIL_BARO));
+}
+
+void test_a_garbled_setpoint_descends_rather_than_climbing(void)
+{
+    /* Both directions of nonsense must fail toward the ground. Clamping a NaN
+     * to the CEILING would turn one corrupt float into a full-power climb. */
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f,
+        pursuit_clamp_alt_setpoint(std::nan(""), true, CEIL_TOF, CEIL_BARO));
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f,
+        pursuit_clamp_alt_setpoint(-5.0f, true, CEIL_TOF, CEIL_BARO));
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f,
+        pursuit_clamp_alt_setpoint(HUGE_VALF, false, CEIL_TOF, CEIL_BARO));
+}
+
 /* ----------------------------------------------------------------- main */
 
 int main(int, char **)
@@ -243,6 +290,11 @@ int main(int, char **)
     RUN_TEST(test_output_stays_within_limits);
     RUN_TEST(test_arming_does_not_command_a_step);
     RUN_TEST(test_survives_degenerate_dt);
+
+    RUN_TEST(test_without_a_barometer_the_ceiling_is_the_rangefinder);
+    RUN_TEST(test_with_a_barometer_thirty_feet_is_allowed);
+    RUN_TEST(test_a_reachable_setpoint_passes_through_untouched);
+    RUN_TEST(test_a_garbled_setpoint_descends_rather_than_climbing);
 
     return UNITY_END();
 }

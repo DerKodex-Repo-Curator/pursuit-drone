@@ -27,6 +27,7 @@ class Icm42688;
 class Madgwick;
 class Battery;
 class Rangefinder;
+class Bmp390;
 
 struct BenchDeps {
     FlightState *state;
@@ -34,6 +35,7 @@ struct BenchDeps {
     Madgwick    *ahrs;
     Battery     *battery;
     Rangefinder *tof;
+    Bmp390      *baro;
 };
 
 /* Feed one serial character. Returns true if it was consumed as a command. */

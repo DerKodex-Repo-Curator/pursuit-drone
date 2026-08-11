@@ -38,6 +38,15 @@ AltHoldConfig default_alt_hold_config()
     return c;
 }
 
+float pursuit_clamp_alt_setpoint(float requested_m, bool baro_present,
+                                 float tof_ceiling_m, float baro_ceiling_m)
+{
+    const float ceiling = baro_present ? baro_ceiling_m : tof_ceiling_m;
+    /* Floor at zero rather than at the ceiling: a garbled setpoint should make
+     * the aircraft descend to the ground, not climb to the limit. */
+    return clampf(requested_m, 0.0f, ceiling);
+}
+
 AltitudeHold::AltitudeHold()
     : c_(default_alt_hold_config()),
       hover_(0.62f), integral_(0.0f), sp_m_(0.0f),

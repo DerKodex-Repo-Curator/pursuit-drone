@@ -23,9 +23,11 @@
 #include <WiFiUdp.h>
 
 #include "alt_hold.h"
+#include "altitude_fuse.h"
 #include "battery.h"
 #include "benchtest.h"
 #include "blackbox.h"
+#include "bmp390.h"
 #include "camera.h"
 #include "config.h"
 #include "flight_state.h"
@@ -84,13 +86,24 @@ static Madgwick g_ahrs(0.06f);
 static AnglePid g_ang_roll, g_ang_pitch;
 static RatePid  g_rate_roll, g_rate_pitch, g_rate_yaw;
 static Rangefinder g_tof;
+static Bmp390 g_baro;
+static AltitudeFuse g_altfuse;
 static AltitudeHold g_alt;
 
 static EulerAngles g_att = {0.0f, 0.0f, 0.0f};
 static ImuSample g_imu_sample{};
+
+/* The FUSED height above the arming point — rangefinder low down, barometer
+ * above it, blended across the handover. Everything downstream (altitude hold,
+ * telemetry, the blackbox) reads this rather than either sensor directly, so
+ * there is exactly one definition of "how high is it" in the firmware. */
 static float g_height_m = 0.0f;
 static bool g_height_valid = false;
 static uint32_t g_last_height_ms = 0;
+
+/* Raw barometric altitude on the sensor's own datum, kept only so the fusion
+ * filter can be re-zeroed at the instant of arming. Never used as a height. */
+static float g_baro_alt_m = 0.0f;
 
 /* Outer-loop gain: 6 deg/s of rotation demanded per degree of attitude
  * error, capped at the airframe's rate limit. Gentle on purpose — the angle
@@ -265,6 +278,24 @@ void setup(void)
                       g_tof.last_error());
     }
 
+    /* The barometer is what decides the ceiling. Without it the aircraft is
+     * limited to the rangefinder's honest range; with it, roughly 30 ft. Both
+     * numbers are printed because the difference is the entire reason the part
+     * is fitted, and because a barometer that silently failed to probe would
+     * otherwise look identical to one that is working. */
+    if (g_baro.begin()) {
+        Serial.printf("barometer ok (BMP390 @0x%02X) — ceiling %.1fm\n",
+                      g_baro.address(), ALT_CEILING_BARO_M);
+        Serial.println("  port must be covered with open-cell FOAM, not tape:"
+                       " prop wash across");
+        Serial.println("  it reads as tens of metres, and light on the die "
+                       "shifts the reading");
+    } else {
+        Serial.printf("barometer ABSENT (%s) — ceiling %.1fm on the "
+                      "rangefinder alone\n",
+                      g_baro.last_error(), ALT_CEILING_TOF_M);
+    }
+
     if (camera_begin()) {
         Serial.printf("camera ok — stream on http://%s:81/\n",
                       WiFi.softAPIP().toString().c_str());
@@ -330,6 +361,7 @@ void loop(void)
     static uint32_t last_loop_us = micros();
     static uint32_t last_batt_ms = 0;
     static uint32_t last_tof_ms = 0;
+    static uint32_t last_baro_ms = 0;
     static uint32_t last_telem_ms = 0;
     static uint32_t last_hz_ms = 0;
 
@@ -349,7 +381,7 @@ void loop(void)
     /* Bench console. Only ever reachable while IDLE — bench_key() and
      * bench_update() both re-check the state, so a command arriving mid-test
      * cancels it rather than racing it. */
-    static BenchDeps bench{&g_state, &g_imu, &g_ahrs, &g_batt, &g_tof};
+    static BenchDeps bench{&g_state, &g_imu, &g_ahrs, &g_batt, &g_tof, &g_baro};
     while (Serial.available()) {
         const char c = (char)Serial.read();
         if (c != '\n' && c != '\r') bench_key(c, bench);
@@ -363,17 +395,46 @@ void loop(void)
 
     attitude_update(dt_s);
 
+    /* Barometer at its own rate, pushed in RAW on its own datum — the fusion
+     * filter subtracts a reference captured at arming, so an absolute
+     * pressure altitude that is tens of metres out with the weather costs
+     * nothing. read() returns invalid when no conversion is ready, which at
+     * 50Hz against a 1kHz loop is most of the time. */
+    if (now_ms - last_baro_ms >= 1000 / BARO_HZ) {
+        /* A gap longer than this is a stall, not a sample interval. Feeding
+         * the real number into a first-order filter would collapse it to a
+         * pass-through for that step. */
+        const float baro_dt =
+            fminf((float)(now_ms - last_baro_ms) * 1e-3f, 0.2f);
+        last_baro_ms = now_ms;
+
+        Bmp390Sample b = g_baro.read();
+        if (b.valid) {
+            g_baro_alt_m = b.altitude_m;
+            g_altfuse.push_baro(b.altitude_m, baro_dt);
+        }
+    }
+
     /* Rangefinder at its own rate — it only produces a new sample at 30Hz,
      * and the attitude is passed in so the reading can be projected back onto
      * the vertical before anything acts on it. */
     if (now_ms - last_tof_ms >= 1000 / TOF_HZ) {
+        const float tof_dt =
+            fminf((float)(now_ms - last_tof_ms) * 1e-3f, 0.2f);
+        last_tof_ms = now_ms;
+
         RangeSample r = g_tof.update(g_att.roll, g_att.pitch);
-        if (r.valid) {
-            g_height_m = r.height_m;
+        /* Pushed on EVERY cycle, valid or not. This call is also what ages
+         * both sources inside the filter, so skipping it after a bad reading
+         * would freeze the staleness check that decides when to stop trusting
+         * altitude at all — the reading would simply never grow old. */
+        g_altfuse.push_tof(r.height_m, r.valid, tof_dt);
+
+        if (g_altfuse.valid()) {
+            g_height_m = g_altfuse.height();
             g_height_valid = true;
             g_last_height_ms = now_ms;
         }
-        last_tof_ms = now_ms;
     }
 
     if (now_ms - last_batt_ms >= 1000 / BATT_HZ) {
@@ -385,6 +446,21 @@ void loop(void)
         /* A flat pack is not a reason to keep flying and hope. */
         if (g_batt.critical()) g_state.emergency_land();
     }
+
+    /* Capture the barometric datum at the INSTANT of arming, on the rising
+     * edge only. arm() deliberately discards the learned baro-to-ground
+     * offset — the aircraft may not be standing where it stood last flight —
+     * so calling it every pass while disarmed, the way the altitude setpoint
+     * is re-seated below, would mean the offset is never learned at all.
+     *
+     * The datum being one noisy sample rather than a filtered one does not
+     * matter: whatever error it carries lands in the offset and is subtracted
+     * again. That is the whole point of learning an offset instead of
+     * trusting a datum. */
+    static bool was_enabled = false;
+    const bool motors_on = g_state.motors_enabled();
+    if (motors_on && !was_enabled) g_altfuse.arm(g_baro_alt_m);
+    was_enabled = motors_on;
 
     /* --- mix and drive ---------------------------------------------------
      * Everything above decides WHAT; this decides whether it reaches a motor.
@@ -431,7 +507,15 @@ void loop(void)
 
         float throttle;
         if (sp.alt_hold) {
-            throttle = g_alt.update(sp.alt_sp_m, g_height_m, height_fresh,
+            /* The laptop asks for a height; the aircraft decides whether that
+             * height is one it can actually measure. Without the barometer
+             * this clamps to the rangefinder's honest range, so a vision
+             * stack configured for a barometer it does not have cannot climb
+             * the aircraft out of its own sensing. */
+            const float target_m = pursuit_clamp_alt_setpoint(
+                sp.alt_sp_m, g_baro.present(),
+                ALT_CEILING_TOF_M, ALT_CEILING_BARO_M);
+            throttle = g_alt.update(target_m, g_height_m, height_fresh,
                                     g_alt.hover_throttle(), dt_s);
         } else {
             throttle = sp.alt_sp_m;   /* the field carries throttle directly */
@@ -484,13 +568,26 @@ void loop(void)
             r.motor[3] = bb_scale_duty(m.m4);
             r.throttle = bb_scale_duty(throttle);
             r.vbat = bb_scale_volts(g_batt.instant_volts());
+            /* Clamped at BOTH ends. The rangefinder could never report a
+             * negative height, so the old one-sided clamp was safe; the
+             * barometer can — a slightly imperfect offset, or the aircraft
+             * genuinely below where it armed. Converting a negative float to
+             * unsigned is undefined, and in practice logs a 65-metre spike. */
             r.alt_mm = (uint16_t)(g_height_valid
-                                  ? fminf(g_height_m * 1000.0f, 65535.0f) : 0);
+                                  ? fminf(fmaxf(g_height_m * 1000.0f, 0.0f),
+                                          65535.0f)
+                                  : 0);
             r.state = g_state.state();
+            /* Bits 4-5 carry WHICH sensor produced the height above. Without
+             * it a log shows one altitude trace and no way to tell whether a
+             * step in it was the aircraft moving or the fusion changing its
+             * mind — which is exactly the failure this whole path exists to
+             * prevent, and therefore the one worth being able to see. */
             r.flags = (uint8_t)((sp.locked ? 1 : 0) |
                                 (sp.alt_hold ? 2 : 0) |
                                 (g_height_valid ? 4 : 0) |
-                                (g_alt.holding() ? 8 : 0));
+                                (g_alt.holding() ? 8 : 0) |
+                                ((uint8_t)g_altfuse.source() << 4));
             /* The loop PERIOD — spikes here are stalls (WiFi, camera). */
             r.loop_us = (uint16_t)fminf(dt_s * 1e6f, 65535.0f);
             blackbox_push(r);
@@ -516,6 +613,18 @@ void loop(void)
                           (unsigned)blackbox_count(),
                           (unsigned)blackbox_dropped(),
                           WiFi.softAPIP().toString().c_str());
+            /* How far apart the two datums ended up. A steady value near zero
+             * is a healthy barometer; a large or visibly moving one means
+             * prop wash is reaching the port, and the fix is mechanical —
+             * more foam — not a gain change. */
+            if (g_altfuse.offset_learned()) {
+                Serial.printf("baro datum offset %.2fm at landing\n",
+                              g_altfuse.offset());
+            } else if (g_baro.present()) {
+                Serial.println("baro datum NEVER LEARNED — the rangefinder "
+                               "gave nothing usable below 3m, so the aircraft "
+                               "flew on pressure alone above the handover");
+            }
         }
     }
 

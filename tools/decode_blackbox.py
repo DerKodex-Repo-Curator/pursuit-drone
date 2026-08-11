@@ -47,6 +47,20 @@ VOLT_SCALE = 1.0 / 50.0
 STATE_NAMES = {0: "BOOT", 1: "IDLE", 2: "ARMED", 3: "FLYING",
                4: "FAILSAFE", 5: "LANDING"}
 
+# flags byte, written in main.cpp. Bits 0-3 are booleans; bits 4-5 carry which
+# sensor produced the altitude, which is the field worth looking at whenever an
+# altitude trace has a step in it: a step at a source change is the fusion
+# handing over, not the aircraft moving.
+FLAG_LOCKED = 0x01
+FLAG_ALT_HOLD = 0x02
+FLAG_HEIGHT_VALID = 0x04
+FLAG_HOLDING = 0x08
+ALT_SOURCE_NAMES = {0: "none", 1: "tof", 2: "blend", 3: "baro"}
+
+
+def alt_source(flags: int) -> int:
+    return (flags >> 4) & 0x03
+
 
 class Flight:
     def __init__(self, path: str):
@@ -141,6 +155,32 @@ def summarise(f: Flight) -> None:
               f"— the mixer is at its limits, so the PID gains are NOT what "
               f"you are observing")
 
+    # Which sensor was actually flying the altitude loop, and where it changed
+    # over. A handover that leaves a step in the altitude trace means the
+    # baro-to-ground offset was wrong — usually because it was learned while
+    # prop wash was disturbing the port.
+    if any(fl & FLAG_HEIGHT_VALID for fl in f.flags):
+        srcs = {}
+        for fl in f.flags:
+            s = alt_source(fl)
+            srcs[s] = srcs.get(s, 0) + 1
+        print("  alt source: " + "  ".join(
+            f"{ALT_SOURCE_NAMES.get(s, s)} {c*100//len(f)}%"
+            for s, c in sorted(srcs.items(), key=lambda kv: -kv[1])))
+
+        changes = [i for i in range(1, len(f))
+                   if alt_source(f.flags[i]) != alt_source(f.flags[i - 1])]
+        for i in changes[:6]:
+            a, b = alt_source(f.flags[i - 1]), alt_source(f.flags[i])
+            step = f.alt[i] - f.alt[i - 1]
+            print(f"    {f.t[i]-f.t[0]:6.2f}s  "
+                  f"{ALT_SOURCE_NAMES.get(a, a)} -> "
+                  f"{ALT_SOURCE_NAMES.get(b, b)}  at {f.alt[i]:.2f}m"
+                  + ("   <- STEP, the two datums disagree"
+                     if abs(step) > 0.15 else ""))
+        if len(changes) > 6:
+            print(f"    ... and {len(changes)-6} further source changes")
+
     for i, name in enumerate(("roll", "pitch")):
         err = [abs(a[i] - s[i]) for a, s in zip(f.att, f.sp)]
         print(f"  {name:5} tracking error  mean {sum(err)/len(err):5.1f} deg"
@@ -155,7 +195,7 @@ def write_csv(f: Flight, path: str) -> None:
                     "sp_roll", "sp_pitch", "sp_yawrate",
                     "pid_roll", "pid_pitch", "pid_yaw",
                     "m1", "m2", "m3", "m4", "throttle", "vbat", "alt_m",
-                    "state", "flags", "loop_us"])
+                    "state", "flags", "alt_source", "loop_us"])
         for i in range(len(f)):
             w.writerow([f"{f.t[i]:.4f}", *[f"{v:.2f}" for v in f.gyro[i]],
                         *[f"{v:.2f}" for v in f.att[i]],
@@ -164,6 +204,7 @@ def write_csv(f: Flight, path: str) -> None:
                         *[f"{v:.3f}" for v in f.motor[i]],
                         f"{f.throttle[i]:.3f}", f"{f.vbat[i]:.2f}",
                         f"{f.alt[i]:.3f}", f.state[i], f.flags[i],
+                        ALT_SOURCE_NAMES.get(alt_source(f.flags[i]), "?"),
                         f.loop_us[i]])
     print(f"wrote {path}")
 
@@ -207,6 +248,11 @@ def plot(f: Flight, path: str) -> None:
     ax4b = ax[4].twinx()
     ax4b.plot(t, f.alt, "tab:purple", lw=0.8, label="alt")
     ax4b.set_ylabel("alt (m)")
+    # Mark every altitude-source handover. A step in the purple trace at one of
+    # these lines is the fusion's two datums disagreeing, not the aircraft.
+    for i in range(1, len(f)):
+        if alt_source(f.flags[i]) != alt_source(f.flags[i - 1]):
+            ax4b.axvline(t[i], color="tab:purple", ls=":", lw=0.6, alpha=0.5)
     ax[4].set_ylabel("vbat (V)")
     ax[4].set_xlabel("time (s)")
     ax[4].legend(loc="upper left", fontsize=8)

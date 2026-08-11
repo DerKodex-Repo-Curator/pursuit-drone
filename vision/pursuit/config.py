@@ -240,7 +240,15 @@ class ControlConfig:
     alt_kp: float = 0.85           # m/s of setpoint rate per unit error
     alt_max_rate: float = 0.5      # m/s
     alt_min: float = 0.40          # m — below this the ToF and prop wash argue
-    alt_max: float = 2.00          # m — no barometer, ToF tops out
+    # m. Roughly 30 ft, which needs the BMP390 fitted: the VL53L1X stops
+    # existing past 3.5 m and the firmware fuses the two into one height.
+    #
+    # This number is a REQUEST, not a limit. The aircraft clamps it against
+    # what its own fitted sensors can measure (ALT_CEILING_* in the firmware's
+    # config.h), because only the aircraft knows whether a barometer is
+    # actually soldered to it. Raising this on a board with no barometer does
+    # not make it climb higher; it makes the firmware clamp harder.
+    alt_max: float = 9.00
     alt_deadband: float = 0.06
     alt_default: float = 1.20      # m — where it sits when it first locks
 

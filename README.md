@@ -4,7 +4,7 @@
 follows one specific enrolled person by face re-identification.**
 
 [![CI](https://github.com/Pai-88/pursuit-drone/actions/workflows/ci.yml/badge.svg)](https://github.com/Pai-88/pursuit-drone/actions/workflows/ci.yml)
-&nbsp;·&nbsp; 207 Python + 85 native C++ tests
+&nbsp;·&nbsp; 207 Python + 109 native C++ tests
 &nbsp;·&nbsp; MIT
 
 [![system overview](docs/media/pursuit_mindmap.png)](docs/media/pursuit_mindmap.png)
@@ -28,7 +28,7 @@ so the two ends cannot drift apart.
 >
 > What *is* done and checked: the PCB passes a seven-gate executable release
 > check and is fabrication-ready; the firmware builds for the ESP32-S3 and its
-> safety-critical logic passes 85 host tests; the vision pipeline runs at 25 fps
+> safety-critical logic passes 109 host tests; the vision pipeline runs at 25 fps
 > on a laptop webcam and holds a lock on an enrolled person; the two ends have
 > been shown to agree byte-for-byte; and the control cascade has been analysed
 > against a plant model. Everything in this README that is a measurement says
@@ -85,7 +85,7 @@ Nothing below needs an aircraft, a board, or a camera.
 python -m pytest vision/tests -q          # 175 pass with no models downloaded
 
 # 2. the flight-critical firmware logic, compiled and run on the host
-cd firmware && pio test -e native         # 85 tests
+cd firmware && pio test -e native         # 109 tests
 
 # 3. the closed-loop plant model and the stability result above
 python -m pytest sim/flight -q && python sim/flight/lag_sweep.py
@@ -119,7 +119,8 @@ camera / MJPEG over WiFi
   -> ArcFace 512-d embedding                          -> rate PID
   -> person ReID 768-d                                -> mixer, desaturating
   -> 4-state lock machine                             -> phase-staggered PWM
-  -> PD visual servo                                VL53L1X altitude hold 30 Hz
+  -> PD visual servo                                VL53L1X 30 Hz + BMP390 50 Hz
+                                                      -> fused height, altitude hold
   -> CRC-16 UDP, 30 Hz, 3x redundant  ------------>  watchdog, arming interlocks
                                      <------------  telemetry, 20 Hz
 ```
@@ -231,9 +232,10 @@ gerbers/        fabrication output + the three JLCPCB upload files
 
 firmware/       ESP32-S3, PlatformIO. Two environments on purpose:
                   src/            madgwick, pid, mixer, motors, icm42688,
-                                  alt_hold, rangefinder, blackbox, loopstats,
-                                  benchtest, flight_state, battery, frame.h
-                  test/           85 host tests — everything safety-critical is
+                                  alt_hold, rangefinder, bmp390, altitude_fuse,
+                                  blackbox, loopstats, benchtest, flight_state,
+                                  battery, frame.h
+                  test/           109 host tests — everything safety-critical is
                                   written free of Arduino headers so it runs
                                   on a laptop
                   include/        config.h pin map, generated pursuit_link.h
@@ -437,7 +439,8 @@ and it usefully serves the ICM-42688-P's open-drain INT1) and D10 (LED_CTRL —
    D9/D10. Not required — neither pin drives a motor. Leave it alone unless
    you want the IMU interrupt line clean, and note you lose the microSD slot.
 3. Props OFF. Power via USB-C first: flash a firmware stub, check 3V3,
-   scan I2C (expect 0x68 IMU, 0x29 ToF), read the battery ADC.
+   scan I2C (expect 0x68 IMU, 0x29 ToF, and 0x77 if a BMP390 is fitted),
+   read the battery ADC.
 4. First LiPo plug-in through a fused/current-limited lead if you have one.
 5. Motor test one at a time at low duty; verify spin directions.
 
@@ -449,7 +452,8 @@ and it usefully serves the ICM-42688-P's open-drain INT1) and D10 (LED_CTRL —
   TDK's strictest layout note but standard practice at hobby scale.
 - One I2C bus shared by IMU (1kHz reads) + ToF (30Hz) ≈ 40-50% bus
   utilisation at 400kHz — fine; move the IMU to SPI in a respin if you ever
-  need 8kHz gyro ODR.
+  need 8kHz gyro ODR. A BMP390 on the same bus adds ~50Hz of 7-byte reads,
+  which is under 2% more and does not change that conclusion.
 - JST-PH is rated 2A continuous vs ~11A full-throttle bursts — accepted
   whoop-class practice; solder a 20AWG pigtail to the J5 pads for hard use.
 - The 1.6mm board is ~3g heavier than 1.2mm — chosen for first-spin crash

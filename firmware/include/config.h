@@ -42,6 +42,7 @@
 
 #define I2C_ADDR_IMU   0x68  /* AD0 tied low on the board */
 #define I2C_ADDR_TOF   0x29  /* VL53L1X default */
+#define I2C_ADDR_BARO  0x77  /* BMP390, 0x76 if SDO is pulled low */
 #define I2C_FREQ_HZ    400000
 
 /* ---- battery ------------------------------------------------------------
@@ -67,6 +68,7 @@
 /* ---- loop rates --------------------------------------------------------- */
 #define LOOP_HZ        1000   /* attitude control */
 #define TOF_HZ         30     /* VL53L1X long-range mode caps out near here */
+#define BARO_HZ        50     /* BMP390 ODR — comfortably above the alt loop */
 #define TELEM_HZ       20
 #define BATT_HZ        50
 
@@ -78,6 +80,26 @@
 #define MAX_YAW_RATE_DPS   180.0f
 #define MIN_SPIN_THROTTLE  0.06f  /* keeps motors turning so control is live */
 #define MAX_THROTTLE       0.95f  /* leave headroom for attitude correction */
+
+/* ---- altitude ceiling ---------------------------------------------------
+ * The aircraft must never be commandable above the height it can actually
+ * MEASURE, and only this side knows which sensors are physically fitted. The
+ * laptop asks for a height; the firmware decides whether that height is
+ * observable and clamps it if not.
+ *
+ * Without a barometer, altitude hold goes blind somewhere past the VL53L1X's
+ * 3.5 m — and the failure is quiet, because losing the floor degrades to
+ * open-loop throttle rather than to an error. The aircraft then holds
+ * whatever throttle it last learned, at whatever height it happened to lose
+ * the reading, and drifts. So the rangefinder-only ceiling sits at 2.5 m,
+ * well inside the sensor's honest range with the tilt correction applied.
+ *
+ * With the BMP390 fitted the ceiling is 9.5 m — a shade over 30 ft. Not a
+ * physical limit; a deliberate one, because this is a 92 mm airframe with no
+ * GPS, and beyond visual judgement of its attitude there is nothing to fly by.
+ */
+#define ALT_CEILING_TOF_M   2.50f
+#define ALT_CEILING_BARO_M  9.50f
 
 /* ---- battery protection -------------------------------------------------
  * The XIAO's 3V3 comes from an SGM6029C buck that drops out around 3.5V in.

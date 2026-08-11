@@ -43,6 +43,21 @@ struct AltHoldConfig {
 
 AltHoldConfig default_alt_hold_config();
 
+/* Clamp a commanded height to what the fitted sensors can actually observe.
+ *
+ * This is deliberately on the aircraft rather than in the vision stack. The
+ * laptop has no way to know whether a barometer is soldered to this particular
+ * board — and the consequence of getting it wrong is not an error message, it
+ * is a climb past the rangefinder's range into open-loop throttle. A limit
+ * that depends on hardware belongs where the hardware is.
+ *
+ * `requested_m` is whatever arrived over the link, already CRC-checked but not
+ * otherwise trusted: a non-finite or negative value returns the floor rather
+ * than propagating into the altitude loop.
+ */
+float pursuit_clamp_alt_setpoint(float requested_m, bool baro_present,
+                                 float tof_ceiling_m, float baro_ceiling_m);
+
 class AltitudeHold {
 public:
     AltitudeHold();
