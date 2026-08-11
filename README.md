@@ -4,7 +4,7 @@
 follows one specific enrolled person by face re-identification.**
 
 [![CI](https://github.com/Pai-88/pursuit-drone/actions/workflows/ci.yml/badge.svg)](https://github.com/Pai-88/pursuit-drone/actions/workflows/ci.yml)
-&nbsp;·&nbsp; 207 Python + 109 native C++ tests
+&nbsp;·&nbsp; 225 Python + 109 native C++ tests
 &nbsp;·&nbsp; MIT
 
 [![system overview](docs/media/pursuit_mindmap.png)](docs/media/pursuit_mindmap.png)
@@ -82,7 +82,7 @@ Nothing below needs an aircraft, a board, or a camera.
 
 ```bash
 # 1. the off-board perception, control, lock and protocol stack
-python -m pytest vision/tests -q          # 175 pass with no models downloaded
+python -m pytest vision/tests -q          # 193 pass with no models downloaded
 
 # 2. the flight-critical firmware logic, compiled and run on the host
 cd firmware && pio test -e native         # 109 tests
@@ -95,7 +95,7 @@ For the full vision pipeline, fetch the ~295 MB of weights first — they are no
 in the repository, and two of them exceed GitHub's file-size limit:
 
 ```bash
-python vision/fetch_models.py && python -m pytest vision/tests -q   # 193 pass
+python vision/fetch_models.py && python -m pytest vision/tests -q   # 211 pass
 ```
 
 Then run it live on a webcam, with no drone involved at all:
@@ -244,7 +244,7 @@ vision/         off-board perception and control, ONNX Runtime + CoreML
                   pursuit/        detector, bytetrack, face, reid, gallery,
                                   lock, control, geometry, arbiter, pilot,
                                   protocol, link, pipeline
-                  tests/          177 tests
+                  tests/          211 tests
                   tools/          e2e_loop.py, degradation_sweep.py
                   sim_drone.py    a fake aircraft for loopback testing
 
