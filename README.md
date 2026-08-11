@@ -255,7 +255,10 @@ ml/             training, on real data, in its own Python 3.11 venv
                   runs/                history.json, ablations.json, eval.npz
 
 sim/flight/     closed-loop plant model and the stability sweep above
-docs/           DESIGN.md, VERIFICATION.md, assembly SVGs, vendor/SOURCES.md
+docs/           DESIGN.md      how it works and why
+                VERIFICATION.md what was checked BEFORE the gerbers went out
+                BRINGUP.md      what gets checked AFTER the boards come back
+                assembly SVGs, vendor/SOURCES.md
 ```
 
 ---
@@ -426,6 +429,11 @@ and it usefully serves the ICM-42688-P's open-drain INT1) and D10 (LED_CTRL —
 0.29 mA of LED glow at reset).
 
 ## First power-up — read this or release the smoke
+
+The summary is below. The tickable version, ordered so no step can destroy
+the one after it, is [**`docs/BRINGUP.md`**](docs/BRINGUP.md) — including the
+sign-off table that has to be filled in from real hardware before any part of
+this project is described as working.
 
 1. **Verify battery polarity with a multimeter against the `+` on the top
    silk beside J1's left pad before ever plugging in.** JST-PH polarity is
