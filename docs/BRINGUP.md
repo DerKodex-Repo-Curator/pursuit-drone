@@ -95,7 +95,13 @@ cp firmware/include/secrets.h.example firmware/include/secrets.h
       I²C transactions timing out against a bus with nothing on it. Re-measure
       at step 3 with the real board and only believe it then.
 - [ ] SoftAP `PURSUIT-1` appears; laptop can join; `192.168.4.1` responds.
-- [ ] Camera stream at `http://192.168.4.1:81/` shows a picture.
+- [ ] Camera stream at `http://192.168.4.1:81/` shows a picture. Verify a
+      frame actually DECODES, not just that boot printed `camera ok` — that
+      line only means `camera_begin()` returned. Expect
+      `multipart/x-mixed-replace` and **800x600**. If frames come back
+      160x120, PSRAM is missing: camera.cpp falls back to QQVGA, at which a
+      face is ~6px at 3m and the aircraft cannot re-acquire a target it has
+      lost.
 - [ ] Blackbox reports its PSRAM allocation at boot (needs the Sense module).
       Expect roughly `blackbox ok — 191380 records (~382s at 500Hz)`. If it
       says **`ABSENT (no PSRAM)`** the build has lost
