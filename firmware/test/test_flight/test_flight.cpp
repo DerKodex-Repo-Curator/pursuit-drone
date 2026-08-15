@@ -140,6 +140,50 @@ void test_stays_in_boot_until_sensors_pass(void)
     TEST_ASSERT_FALSE(fs.motors_enabled());
 }
 
+void test_a_fault_cannot_promote_boot_to_idle(void)
+{
+    /* Found on hardware. A bare XIAO has no battery divider, so VBAT reads
+     * 0.00V, the limiter latches critical, and main.cpp calls
+     * emergency_land() at 50Hz. That used to fall through to enter(IDLE) and
+     * the aircraft reported IDLE over telemetry while its own boot banner
+     * insisted it was held in BOOT.
+     *
+     * Arming stayed correctly refused — that gate is sensors_ok_, which is
+     * independent of the state — but IDLE reads to every downstream consumer
+     * as "the sensors passed". A FAULT must never move the aircraft forward
+     * through the state machine. */
+    FlightState fs;
+    TEST_ASSERT_EQUAL_UINT8(PURSUIT_STATE_BOOT, fs.state());
+    for (int i = 0; i < 50; i++) fs.emergency_land();
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(PURSUIT_STATE_BOOT, fs.state(),
+        "a fault promoted the aircraft out of its sensor gate");
+    TEST_ASSERT_FALSE(fs.motors_enabled());
+
+    /* And it must still be unarmable afterwards. */
+    pursuit_cmd_t c;
+    fill_cmd(&c, 1, 0, 0, 0, 0.5f, ARMED_HOLD);
+    fs.on_packet((uint8_t *)&c, sizeof(c), 100);
+    TEST_ASSERT_EQUAL_UINT8(PURSUIT_STATE_BOOT, fs.state());
+}
+
+void test_emergency_land_still_works_once_sensors_have_passed(void)
+{
+    /* The BOOT guard must not have disarmed the actual failsafe. */
+    FlightState fs;
+    fs.sensors_ready();
+    TEST_ASSERT_EQUAL_UINT8(PURSUIT_STATE_IDLE, fs.state());
+
+    pursuit_cmd_t c;
+    fill_cmd(&c, 1, 0, 0, 0, 0.5f, ARMED_HOLD);
+    fs.on_packet((uint8_t *)&c, sizeof(c), 100);
+    fill_cmd(&c, 2, 0, 0, 0, 0.5f, ARMED_HOLD);
+    fs.on_packet((uint8_t *)&c, sizeof(c), 130);
+    TEST_ASSERT_EQUAL_UINT8(PURSUIT_STATE_FLYING, fs.state());
+
+    fs.emergency_land();
+    TEST_ASSERT_EQUAL_UINT8(PURSUIT_STATE_LANDING, fs.state());
+}
+
 void test_arming_requires_the_flag_on_every_packet(void)
 {
     FlightState fs;
@@ -366,6 +410,8 @@ int main(int, char **)
     RUN_TEST(test_idle_floor_keeps_control_alive);
 
     RUN_TEST(test_stays_in_boot_until_sensors_pass);
+    RUN_TEST(test_a_fault_cannot_promote_boot_to_idle);
+    RUN_TEST(test_emergency_land_still_works_once_sensors_have_passed);
     RUN_TEST(test_arming_requires_the_flag_on_every_packet);
     RUN_TEST(test_corrupt_packets_are_discarded);
     RUN_TEST(test_replayed_packets_are_ignored);

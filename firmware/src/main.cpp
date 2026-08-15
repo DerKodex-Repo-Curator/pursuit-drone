@@ -111,7 +111,11 @@ static float g_baro_alt_m = 0.0f;
  * how a cascade starts fighting itself. */
 static constexpr float ANGLE_KP = 6.0f;
 
-static uint8_t g_imu_bad = 0;
+/* How long the estimate has been stale, in seconds. Accumulated rather than
+ * counted, because the loop rate is not a constant when the IMU is failing —
+ * see IMU_LOSS_TIMEOUT_S in config.h. */
+static float g_imu_bad_s = 0.0f;
+static bool g_imu_loss_declared = false;
 
 static void attitude_update(float dt_s)
 {
@@ -119,16 +123,19 @@ static void attitude_update(float dt_s)
     if (!g_imu_sample.valid) {
         /* Flying on a frozen attitude estimate is unrecoverable: the PID
          * holds whatever correction it last computed while the aircraft
-         * drifts. ~50ms of consecutive failures on a 1kHz bus means the
-         * sensor or the bus is gone, not glitching. */
-        if (g_imu_bad < 255) g_imu_bad++;
-        if (g_imu_bad == 50 && g_state.motors_enabled()) {
-            Serial.println("IMU LOST IN FLIGHT — emergency landing");
+         * drifts out from under it. */
+        if (dt_s > 0.0f) g_imu_bad_s += dt_s;
+        if (!g_imu_loss_declared && g_imu_bad_s >= IMU_LOSS_TIMEOUT_S
+            && g_state.motors_enabled()) {
+            g_imu_loss_declared = true;
+            Serial.printf("IMU LOST IN FLIGHT (%.0f ms) — emergency landing\n",
+                          g_imu_bad_s * 1000.0f);
             g_state.emergency_land();
         }
         return;
     }
-    g_imu_bad = 0;
+    g_imu_bad_s = 0.0f;
+    g_imu_loss_declared = false;
 
     g_ahrs.update(g_imu_sample.gx, g_imu_sample.gy, g_imu_sample.gz,
                   g_imu_sample.ax, g_imu_sample.ay, g_imu_sample.az, dt_s);

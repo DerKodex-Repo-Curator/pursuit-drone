@@ -208,3 +208,43 @@ def test_malformed_setpoints_are_never_transmitted(rig):
     time.sleep(0.05)
     drone.poll()
     assert drone.accepted == 0
+
+
+def test_rtt_is_not_poisoned_by_a_gap_in_commands(rig):
+    """A silent stretch must not be averaged in as latency.
+
+    The firmware echoes the timestamp of the last command it ACCEPTED, and
+    telemetry keeps flowing at 20Hz whether or not new commands arrive. So a
+    repeated echo does not mean a slow round trip — it means no new command
+    has been accepted, and the age of that stamp is the length of the gap.
+
+    Measured on hardware 2026-08-11: six seconds of commands followed by five
+    of silence reported rtt 1641ms on a link that pings in 3.2ms. That number
+    feeds the controller's lead compensation, where the stability boundary
+    without attitude compensation is ~17ms.
+    """
+    drone, link = rig()
+
+    for seq in range(1, 15):
+        link.send(Command(seq=seq, alt_sp=1.0,
+                          flags=FLAG_ARMED | FLAG_ALT_HOLD))
+        deadline = time.monotonic() + 0.04
+        while time.monotonic() < deadline:
+            drone.poll()
+            drone.send_telemetry()
+            time.sleep(0.005)
+    settled = link.stats.rtt_ms
+    assert 0.0 < settled < 250.0, f"loopback rtt implausible: {settled}"
+
+    # Now go quiet, but keep the drone talking — which is exactly what real
+    # hardware does, telemetry at 20Hz regardless. Every packet from here on
+    # echoes the SAME stamp, growing stale by the length of the silence.
+    deadline = time.monotonic() + 1.2
+    while time.monotonic() < deadline:
+        drone.send_telemetry()
+        time.sleep(0.01)
+
+    assert link.stats.received > 0
+    assert link.stats.rtt_ms == pytest.approx(settled, abs=1.0), (
+        f"a {1.2:.1f}s command gap moved the rtt estimate from {settled:.1f}ms "
+        f"to {link.stats.rtt_ms:.1f}ms — stale echoes are being averaged in")

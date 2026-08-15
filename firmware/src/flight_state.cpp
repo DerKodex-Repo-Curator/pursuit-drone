@@ -66,6 +66,19 @@ void FlightState::disarm()
 
 void FlightState::emergency_land()
 {
+    /* BOOT is not a flying state to be landed from — it is the gate that says
+     * the sensors have NOT passed, and a fault must never move the aircraft
+     * forward through the state machine.
+     *
+     * Observed on hardware 2026-08-11: a bare XIAO has no battery divider, so
+     * VBAT reads 0.00V, the limiter latches critical, and this was called at
+     * 50Hz. The aircraft reported IDLE over telemetry while the boot banner
+     * insisted it was held in BOOT. Arming was still correctly refused —
+     * that gate is `sensors_ok_`, which is independent of the state — but
+     * every downstream reader (telemetry, the HUD's AIRCRAFT panel) was being
+     * told the sensors had passed when they had not. */
+    if (state_ == PURSUIT_STATE_BOOT) return;
+
     if (state_ == PURSUIT_STATE_ARMED || state_ == PURSUIT_STATE_FLYING ||
         state_ == PURSUIT_STATE_FAILSAFE) {
         enter(PURSUIT_STATE_LANDING);

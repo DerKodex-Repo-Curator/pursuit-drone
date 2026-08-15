@@ -28,6 +28,12 @@ from .protocol import (FLAG_ALT_HOLD, FLAG_FAILSAFE, Command, ProtocolError,
                        TELEM_SIZE, Telemetry, is_newer)
 
 
+# A round trip over a SoftAP on the same desk is single-digit
+# milliseconds. This is the ceiling past which a sample is a command
+# gap rather than a latency measurement.
+RTT_PLAUSIBLE_MS = 250.0
+
+
 class LinkStats:
     __slots__ = ("sent", "send_errors", "received", "rejected", "stale",
                  "last_rx_ms", "last_tx_ms", "rtt_ms")
@@ -57,6 +63,8 @@ class DroneLink:
         self._last_seq = -1
         self._t0 = time.monotonic()
         self._cmd_times: dict[int, float] = {}
+        # The last echoed command stamp already counted toward RTT.
+        self._last_rtt_stamp: int = 0
 
         if cfg.enabled:
             self._open()
@@ -159,9 +167,25 @@ class DroneLink:
                 # the two ends needing a shared clock. It is the number the
                 # controller's lead compensation actually wants; before this
                 # it was a hard-coded guess.
-                if telem.t_ms:
+                # Each echoed stamp is usable ONCE. The firmware echoes the
+                # last command it ACCEPTED, and telemetry keeps flowing at
+                # 20Hz whether or not new commands arrive — so a repeated
+                # stamp does not mean a slow round trip, it means no new
+                # command has been accepted since the last one, and the age of
+                # that stamp is the length of the gap.
+                #
+                # Measured on hardware: six seconds of commands followed by
+                # five seconds of silence reported rtt 1641ms on a link that
+                # pings in 3.2ms. The old 2000ms window let every one of those
+                # stale samples into the average, and this number feeds the
+                # controller's lead compensation.
+                if telem.t_ms and telem.t_ms != self._last_rtt_stamp:
+                    self._last_rtt_stamp = telem.t_ms
                     rtt = self._now_ms() - float(telem.t_ms)
-                    if 0.0 <= rtt < 2000.0:
+                    # A real round trip over a SoftAP is single-digit
+                    # milliseconds. Anything past this is a gap, not a
+                    # latency, and averaging it in poisons the estimate.
+                    if 0.0 <= rtt < RTT_PLAUSIBLE_MS:
                         self.stats.rtt_ms = (rtt if self.stats.rtt_ms == 0.0
                                              else 0.85 * self.stats.rtt_ms
                                              + 0.15 * rtt)

@@ -101,6 +101,21 @@
 #define ALT_CEILING_TOF_M   2.50f
 #define ALT_CEILING_BARO_M  9.50f
 
+/* ---- sensor loss ---------------------------------------------------------
+ * How long the attitude estimate may be stale before flying on it is
+ * unrecoverable. Flying on a frozen estimate means the PID holds whatever
+ * correction it last computed while the aircraft drifts out from under it.
+ *
+ * A DURATION, not a count of failed reads. It was a count of 50, justified in
+ * the comment as "~50ms on a 1kHz bus" — which silently assumed the reads
+ * stay fast. Measured on hardware: a read against a dead I2C bus BLOCKS for
+ * about 7.5ms waiting for a timeout, so the loop drops to ~130Hz and 50
+ * failures takes ~375ms, not 50. Seven times longer flying blind than
+ * intended, and the failure mode that makes reads slow is the same one that
+ * makes them fail.
+ */
+#define IMU_LOSS_TIMEOUT_S  0.05f
+
 /* ---- battery protection -------------------------------------------------
  * The XIAO's 3V3 comes from an SGM6029C buck that drops out around 3.5V in.
  * SPICE puts the pack at 3.61V during a four-motor full-throttle burst with
