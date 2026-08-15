@@ -6,6 +6,8 @@
 #include <WiFi.h>
 #include <esp_camera.h>
 
+#include "config.h"
+
 namespace {
 
 /* XIAO ESP32S3 Sense camera pins. These are on the module's own internal
@@ -24,6 +26,7 @@ bool g_ready = false;
 volatile uint32_t g_frames = 0;
 volatile uint32_t g_clients = 0;
 const char *g_err = "";
+int g_ae_level = CAM_AE_LEVEL_FLIGHT;
 WiFiServer *g_server = nullptr;
 
 const char *BOUNDARY = "pursuitframe";
@@ -171,8 +174,24 @@ bool camera_begin(uint16_t port)
          * An earlier version of this capped gain at 4x to avoid noise, which
          * had the priority exactly backwards. */
         s->set_gainceiling(s, GAINCEILING_16X);
-        s->set_ae_level(s, -2);        /* target a darker, shorter exposure */
+        s->set_ae_level(s, CAM_AE_LEVEL_FLIGHT);
+        g_ae_level = CAM_AE_LEVEL_FLIGHT;
         s->set_aec2(s, 1);             /* DSP-assisted AEC converges faster */
+
+        /* Auto white balance, explicitly.
+         *
+         * This was simply never configured, and under tungsten the frames
+         * came back with a heavy yellow-green cast. That is not cosmetic
+         * here: a face embedding is not colour-invariant, so a cast present
+         * at enrolment and absent at match time (or the reverse) costs
+         * similarity on every comparison — and the whole identity layer is a
+         * threshold on that similarity.
+         *
+         * The gain control matters as much as the mode: with awb_gain off the
+         * sensor computes a correction and then does not apply it. */
+        s->set_whitebal(s, 1);
+        s->set_awb_gain(s, 1);
+        s->set_wb_mode(s, 0);          /* 0 = auto */
     }
 
     g_server = new WiFiServer(port);
@@ -189,6 +208,19 @@ bool camera_begin(uint16_t port)
     return true;
 }
 
+bool camera_set_exposure_bias(int level)
+{
+    if (level < -2) level = -2;
+    if (level > 2) level = 2;
+    sensor_t *s = esp_camera_sensor_get();
+    if (!s) return false;
+    if (s->set_ae_level(s, level) != 0) return false;
+    g_ae_level = level;
+    return true;
+}
+
+int camera_exposure_bias(void) { return g_ae_level; }
+
 bool camera_ready(void) { return g_ready; }
 uint32_t camera_frames(void) { return g_frames; }
 uint32_t camera_clients(void) { return g_clients; }
@@ -198,6 +230,8 @@ const char *camera_error(void) { return g_err; }
 
 bool camera_begin(uint16_t) { return false; }
 bool camera_ready(void) { return false; }
+bool camera_set_exposure_bias(int) { return false; }
+int camera_exposure_bias(void) { return 0; }
 uint32_t camera_frames(void) { return 0; }
 uint32_t camera_clients(void) { return 0; }
 const char *camera_error(void) { return "host"; }

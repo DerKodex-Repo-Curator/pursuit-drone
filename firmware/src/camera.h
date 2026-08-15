@@ -30,4 +30,19 @@ uint32_t camera_frames(void);
 uint32_t camera_clients(void);
 const char *camera_error(void);
 
+/* Exposure bias, -2..2, straight through to the sensor's AE target.
+ *
+ * Flight and bench want opposite things and the difference is about two
+ * stops. In the air the enemy is MOTION BLUR — a yawing quadcopter smears
+ * every edge, and the detector keys on edges — so the right answer is a short
+ * exposure paid for with gain, accepting a dark noisy frame. On a desk
+ * nothing is moving, there is no blur to avoid, and the same setting just
+ * makes a backlit subject unreadable.
+ *
+ * Deliberately not persisted and not reachable over the link: it is a bench
+ * convenience, and the flight value is the one that must survive a reboot.
+ */
+bool camera_set_exposure_bias(int level);
+int camera_exposure_bias(void);
+
 #endif /* PURSUIT_CAMERA_H */

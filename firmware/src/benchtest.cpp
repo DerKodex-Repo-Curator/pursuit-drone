@@ -7,6 +7,7 @@
 
 #include "battery.h"
 #include "bmp390.h"
+#include "camera.h"
 #include "config.h"
 #include "flight_state.h"
 #include "icm42688.h"
@@ -120,6 +121,8 @@ void bench_print_help(void)
     Serial.println(" o         orientation check (tilt the board, watch the "
                    "numbers)");
     Serial.println(" s         sensor + battery + link report");
+    Serial.println(" e         camera exposure: flight (dark, blur-proof) "
+                   "<-> bench (bright)");
     Serial.println(" +  -      motor test duty up / down");
     Serial.println(" x         stop everything");
     Serial.println(" h         this help");
@@ -169,6 +172,26 @@ bool bench_key(char c, const BenchDeps &d)
     case 's':
         g_mode = Mode::Sensors;
         return true;
+    case 'e': {
+        /* Flight biases hard toward a SHORT exposure because motion blur is
+         * what kills the detector, and pays for it with gain. On a bench
+         * nothing is moving, so that same setting only makes a backlit
+         * subject unreadable. This flips between the two; it is not
+         * persisted, so a reboot always comes back flight-ready. */
+        const bool to_bench = camera_exposure_bias() != CAM_AE_LEVEL_BENCH;
+        const int want = to_bench ? CAM_AE_LEVEL_BENCH : CAM_AE_LEVEL_FLIGHT;
+        if (!camera_set_exposure_bias(want)) {
+            Serial.println("exposure: no camera");
+        } else {
+            Serial.printf("exposure: %s (ae_level %+d)%s\n",
+                          to_bench ? "BENCH — brighter" : "FLIGHT — short",
+                          want,
+                          to_bench ? "   <- do NOT enrol a face like this;"
+                                     " match what the aircraft will see"
+                                   : "");
+        }
+        return true;
+    }
     case '+':
         g_duty = fminf(g_duty + 0.03f, 0.35f);
         Serial.printf("motor test duty %.0f%%\n", g_duty * 100.0f);
@@ -288,6 +311,11 @@ void bench_update(uint32_t now_ms, const BenchDeps &d)
                           d.baro ? d.baro->last_error() : "not wired",
                           ALT_CEILING_TOF_M);
         }
+        Serial.printf("  camera     %s   exposure %+d (%s)\n",
+                      camera_ready() ? "OK" : "absent",
+                      camera_exposure_bias(),
+                      camera_exposure_bias() == CAM_AE_LEVEL_BENCH
+                          ? "bench" : "flight");
         bench_print_loop_timing();
         Serial.println("---------------------\n");
         g_mode = Mode::Off;

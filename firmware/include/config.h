@@ -116,6 +116,14 @@
  */
 #define IMU_LOSS_TIMEOUT_S  0.05f
 
+/* ---- camera exposure -----------------------------------------------------
+ * Two stops apart, because flight and bench want opposite things. See
+ * camera.h. The flight value is what boots; the bench value is reachable only
+ * from the serial console, and only while the aircraft is not flying.
+ */
+#define CAM_AE_LEVEL_FLIGHT  (-2)
+#define CAM_AE_LEVEL_BENCH   (2)
+
 /* ---- battery protection -------------------------------------------------
  * The XIAO's 3V3 comes from an SGM6029C buck that drops out around 3.5V in.
  * SPICE puts the pack at 3.61V during a four-motor full-throttle burst with
