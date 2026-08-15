@@ -117,7 +117,6 @@ void serve_task(void *)
 bool blackbox_begin(uint32_t sample_hz, uint32_t seconds)
 {
     g_sample_hz = sample_hz ? sample_hz : 500;
-    const uint32_t want = g_sample_hz * seconds;
 
     if (!psramFound()) {
         /* No PSRAM: no logging. Deliberately NOT falling back to internal
@@ -128,14 +127,47 @@ bool blackbox_begin(uint32_t sample_hz, uint32_t seconds)
         return false;
     }
 
-    g_buf = (BlackboxRecord *)ps_malloc((size_t)want * sizeof(BlackboxRecord));
-    if (!g_buf) {
-        g_cap = 0;
-        return false;
+    /* Ask for what was requested, but never for more than exists.
+     *
+     * The default request is 500Hz for 420s, which is 8,400,000 bytes against
+     * 8MiB of PSRAM = 8,388,608. It does not fit, and it did not fit before
+     * the camera took its framebuffers either. A single ps_malloc of that
+     * size returns null, and the old code treated that exactly like having no
+     * PSRAM at all: no log, one line of boot text, and a tuning session spent
+     * wondering why nothing is being recorded.
+     *
+     * So the buffer is SIZED TO WHAT IS THERE. A shorter log is a log; a
+     * failed allocation is not. Callers read blackbox_capacity() to find out
+     * what they actually got, and main.cpp prints the real duration rather
+     * than the one that was asked for.
+     */
+    const size_t rec = sizeof(BlackboxRecord);
+    uint64_t want = (uint64_t)g_sample_hz * seconds;
+
+    /* Headroom. The camera has already claimed its framebuffers by the time
+     * this runs, but WiFi still grows under load, and a PSRAM allocator with
+     * nothing left is a brownout waiting for a busy moment. */
+    const size_t RESERVE = 512u * 1024u;
+    const size_t free_ps = ESP.getFreePsram();
+    const size_t usable = free_ps > RESERVE ? free_ps - RESERVE : 0;
+    const uint64_t fits = usable / rec;
+    if (want > fits) want = fits;
+
+    /* Back off rather than give up: fragmentation can defeat an allocation
+     * that the free-byte count says should succeed. */
+    while (want >= 2000) {
+        g_buf = (BlackboxRecord *)ps_malloc((size_t)want * rec);
+        if (g_buf) {
+            g_cap = (uint32_t)want;
+            g_head = g_count = g_dropped = 0;
+            return true;
+        }
+        want = want * 3 / 4;
     }
-    g_cap = want;
-    g_head = g_count = g_dropped = 0;
-    return true;
+
+    g_buf = nullptr;
+    g_cap = 0;
+    return false;
 }
 
 void blackbox_push(const BlackboxRecord &r)

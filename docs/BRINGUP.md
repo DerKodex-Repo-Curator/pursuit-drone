@@ -88,9 +88,19 @@ cp firmware/include/secrets.h.example firmware/include/secrets.h
       command over the link.
 
 - [ ] `h` prints the bench help.
+- [ ] `s` prints the sensor report. **The loop timing in it is meaningless on
+      a bare XIAO** — measured 2026-08-11 at mean 7563 µs against a 1000 µs
+      budget, 100 % overruns, every sample clustered in 7275–8088 µs. That
+      tight a cluster is a fixed-cost blocking call, not variable work: it is
+      I²C transactions timing out against a bus with nothing on it. Re-measure
+      at step 3 with the real board and only believe it then.
 - [ ] SoftAP `PURSUIT-1` appears; laptop can join; `192.168.4.1` responds.
 - [ ] Camera stream at `http://192.168.4.1:81/` shows a picture.
 - [ ] Blackbox reports its PSRAM allocation at boot (needs the Sense module).
+      Expect roughly `blackbox ok — 191380 records (~382s at 500Hz)`. If it
+      says **`ABSENT (no PSRAM)`** the build has lost
+      `board_build.arduino.memory_type = qio_opi` / `-DBOARD_HAS_PSRAM`, and
+      you will reach the tuning phase with no way to tune.
 
 **STOP if**: it does not enumerate with a known-good data cable. Everything
 downstream needs this.
