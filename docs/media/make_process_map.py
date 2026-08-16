@@ -1,200 +1,233 @@
 #!/usr/bin/env python3
-"""PURSUIT-1 process mind-map — the life of one decision, photons to props.
-
-The RUNTIME PATH: a single camera frame becoming four motor commands, laid
-out as a left-to-right serpentine so the eye follows the flow. Light,
-editorial style to match the carousel — flat cards, crisp borders, one accent
-per lane, nothing decorative competing with the content.
+"""PURSUIT-1 process map — how it works, in six steps a non-engineer can hold.
 
     docs/media/.../python make_process_map.py
 
-Pure matplotlib, no external assets; the numbers live in one place.
+There is a longer, denser version of this story in pursuit_mindmap.png and in
+the README. This one is deliberately the OPPOSITE: the fewest boxes that still
+tell the truth, in plain words, so somebody scrolling past understands the
+whole machine in about ten seconds.
+
+Emoji are rendered through PIL from Apple Color Emoji and composited as
+images. Matplotlib cannot draw colour emoji itself — its default font has no
+glyphs for most of them and silently draws empty boxes — so drawing them as
+text would produce tofu on someone else's machine and nobody would notice
+until it was already posted.
 """
 from __future__ import annotations
 
-import math
+import os
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.patches import Circle, FancyBboxPatch, PathPatch, Polygon
-from matplotlib.path import Path
+from matplotlib.patches import Circle, FancyBboxPatch, FancyArrow, Polygon
+from PIL import Image, ImageDraw, ImageFont
 
-# ---- light palette --------------------------------------------------------
+# ---- light palette, matching the LinkedIn carousel ------------------------
 BG     = "#ffffff"
-INK    = "#18202c"
+INK    = "#141b26"
 MUTE   = "#5a6472"
-FAINT  = "#9aa3b0"
+FAINT  = "#98a1ae"
 CARD   = "#ffffff"
-INDIGO = "#4f46e5"   # perception, on the laptop
-AMBER  = "#c2740c"   # the radio link
-GREEN  = "#1f9d57"   # flight, on the aircraft
-RED    = "#c0392b"   # the safety net
+INDIGO = "#4f46e5"    # the laptop half
+AMBER  = "#c2740c"    # the radio between them
+GREEN  = "#1f9d57"    # the aircraft half
 
-W, H = 30.0, 16.0
-NW, NH = 3.5, 2.05
+EMOJI_FONT = "/System/Library/Fonts/Apple Color Emoji.ttc"
 
-# ---- the process, in order ------------------------------------------------
-# (num, title, role, subtitle, colour, row)   row 0 top, 1 turn, 2 bottom
-STAGES = [
-    ("01", "CAPTURE",   "see",         "OV2640 to JPEG over WiFi\n800x600, blur-proof exposure", INDIGO, 0),
-    ("02", "DETECT",    "find",        "YOLO11n, person only\nconf 0.15 - measured, not taste",  INDIGO, 0),
-    ("03", "TRACK",     "persist",     "ByteTrack, 3-pass\nIDs survive an occlusion",            INDIGO, 0),
-    ("04", "IDENTIFY",  "is it them",  "ArcFace 512-d + body ReID\nface veto <0.15",             INDIGO, 0),
-    ("05", "LOCK",      "commit",      "4-state machine\ncoasts through an occlusion",           INDIGO, 0),
-    ("06", "AIM",       "servo",       "PD, attitude-compensated\nloop gain 1.31 thru the frame",INDIGO, 0),
-    ("07", "ARBITRATE", "who flies",   "manual / assist / follow\nhold-to-fly deadman",          INDIGO, 0),
-    ("08", "TRANSMIT",  "link",        "30-byte packet\nCRC-16, 30 Hz, x3 redundant",            AMBER,  1),
-    ("09", "VALIDATE",  "trust no one","magic / ver / CRC / seq\nARM held every packet",         GREEN,  2),
-    ("10", "ESTIMATE",  "attitude",    "ICM-42688 at 1 kHz\nMadgwick 6-axis",                    GREEN,  2),
-    ("11", "FUSE",      "one height",  "rangefinder + barometer\nblended across the handover",   GREEN,  2),
-    ("12", "STABILISE", "cascade",     "angle P to rate PID\nD on measurement, no kick",         GREEN,  2),
-    ("13", "PROTECT",   "stay alive",  "battery sag limiter\n400 ms level off, 3 s land",        GREEN,  2),
-    ("14", "DRIVE",     "motors",      "desaturating mixer\n32 kHz staggered PWM x4",            GREEN,  2),
+W, H = 30.0, 17.2
+NW, NH = 6.6, 3.4
+
+# ---- six steps, plus the radio that joins the two halves ------------------
+# (emoji, title, plain-English line, colour, lane)
+STEPS = [
+    ("📷", "SEE",
+     "A camera on the drone streams\nvideo to a laptop over WiFi", INDIGO, 0),
+    ("🧠", "RECOGNISE",
+     "Find every person, then check the face.\nIs this the one it was shown?",
+     INDIGO, 0),
+    ("🎯", "DECIDE",
+     "Work out which way to turn and\nhow far to move to stay with them",
+     INDIGO, 0),
+    ("🛡️", "CHECK",
+     "The drone refuses anything corrupted,\nrepeated, or unsafe", GREEN, 2),
+    ("⚖️", "BALANCE",
+     "Correct its own tilt a thousand\ntimes a second so it stays level",
+     GREEN, 2),
+    ("🌀", "SPIN",
+     "Four motors at four different speeds.\nThat is the whole of how it moves",
+     GREEN, 2),
 ]
 
-Y = {0: 12.3, 1: 8.2, 2: 3.7}
+Y = {0: 13.2, 2: 4.0}
+XS = [5.2, 14.6, 24.0]
+RADIO = (24.0, 8.6)
 
 
-def layout():
-    top = [i for i, s in enumerate(STAGES) if s[5] == 0]
-    turn = [i for i, s in enumerate(STAGES) if s[5] == 1]
-    bot = [i for i, s in enumerate(STAGES) if s[5] == 2]
-    xs = {}
-    left, right = 2.7, W - 2.7
-    for k, i in enumerate(top):
-        xs[i] = (left + (right - left) * k / (len(top) - 1), Y[0])
-    for i in turn:
-        xs[i] = (right, Y[1])
-    for k, i in enumerate(bot):
-        xs[i] = (right - (right - left) * k / (len(bot) - 1), Y[2])
-    return xs
+# ---- emoji -----------------------------------------------------------------
+
+def emoji_rgba(ch: str, box: int = 220) -> np.ndarray | None:
+    """One emoji as a tight RGBA array, or None if the font cannot draw it.
+
+    Apple Color Emoji is an sbix font with fixed strike sizes; 160 is one of
+    them, and asking for an arbitrary size silently degrades. Returning None
+    rather than a blank lets the caller fall back visibly instead of shipping
+    an invisible hole in the picture.
+    """
+    if not os.path.exists(EMOJI_FONT):
+        return None
+    try:
+        font = ImageFont.truetype(EMOJI_FONT, 160)
+        img = Image.new("RGBA", (box, box), (0, 0, 0, 0))
+        ImageDraw.Draw(img).text((box // 2, box // 2), ch, font=font,
+                                 embedded_color=True, anchor="mm")
+        arr = np.asarray(img)
+        if arr[..., 3].max() == 0:
+            return None
+        ys, xs = np.nonzero(arr[..., 3])
+        return arr[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    except Exception:
+        return None
 
 
-def node(ax, x, y, num, title, role, sub, colour):
+def draw_emoji(ax, ch, x, y, size, fallback_colour):
+    arr = emoji_rgba(ch)
+    if arr is None:
+        ax.add_patch(Circle((x, y), size / 2, facecolor=fallback_colour,
+                            alpha=0.15, zorder=8))
+        return
+    h, w = arr.shape[:2]
+    half_w = size / 2
+    half_h = size / 2 * (h / w)
+    ax.imshow(arr, extent=[x - half_w, x + half_w, y - half_h, y + half_h],
+              aspect="auto", zorder=8, interpolation="lanczos")
+
+
+# ---- pieces ----------------------------------------------------------------
+
+def card(ax, x, y, ch, title, line, colour):
     ax.add_patch(FancyBboxPatch(
         (x - NW / 2, y - NH / 2), NW, NH,
-        boxstyle="round,pad=0.02,rounding_size=0.16",
-        linewidth=1.4, edgecolor=colour, facecolor=CARD, zorder=4))
+        boxstyle="round,pad=0.02,rounding_size=0.28",
+        linewidth=1.8, edgecolor=colour, facecolor=CARD, zorder=4))
     ax.add_patch(FancyBboxPatch(
-        (x - NW / 2, y - NH / 2 + 0.10), 0.10, NH - 0.20,
-        boxstyle="round,pad=0,rounding_size=0.04",
+        (x - NW / 2, y + NH / 2 - 0.13), NW, 0.13,
+        boxstyle="round,pad=0,rounding_size=0.05",
         linewidth=0, facecolor=colour, zorder=5))
-    bx, by = x + NW / 2 - 0.44, y + NH / 2 - 0.44
-    ax.add_patch(Circle((bx, by), 0.29, facecolor=colour, edgecolor="none",
-                        zorder=6))
-    ax.text(bx, by, num, color="#ffffff", fontsize=10.5, fontweight="bold",
+    draw_emoji(ax, ch, x, y + 0.82, 1.30, colour)
+    ax.text(x, y - 0.38, title, color=INK, fontsize=23, fontweight="bold",
             ha="center", va="center", zorder=7)
-    lx = x - NW / 2 + 0.36
-    ax.text(lx, y + 0.52, title, color=INK, fontsize=15.5, fontweight="bold",
-            va="center", ha="left", zorder=7)
-    ax.text(lx, y + 0.10, role.upper(), color=colour, fontsize=8.5,
-            fontweight="bold", va="center", ha="left", zorder=7,
-            family="monospace")
-    ax.text(lx, y - 0.50, sub, color=MUTE, fontsize=9.5, va="center",
-            ha="left", zorder=7, linespacing=1.5)
+    ax.text(x, y - 1.16, line, color=MUTE, fontsize=12, ha="center",
+            va="center", zorder=7, linespacing=1.6)
 
 
-def link(ax, p0, p1, colour):
-    (x0, y0), (x1, y1) = p0, p1
-    if abs(y0 - y1) < 0.5:
-        s = np.array([x0 + NW / 2, y0]); e = np.array([x1 - NW / 2, y1])
-        m = (s[0] + e[0]) / 2
-        c1, c2 = np.array([m, s[1]]), np.array([m, e[1]])
-    else:
-        s = np.array([x0, y0 - NH / 2]); e = np.array([x1, y1 + NH / 2])
-        my = (s[1] + e[1]) / 2
-        c1, c2 = np.array([s[0], my]), np.array([e[0], my])
-    path = Path([s, c1, c2, e],
-                [Path.MOVETO, Path.CURVE4, Path.CURVE4, Path.CURVE4])
-    ax.add_patch(PathPatch(path, edgecolor=colour, facecolor="none",
-                           linewidth=1.6, alpha=0.55, zorder=2))
-    d = e - c2; ang = math.atan2(d[1], d[0]); a = 0.19
-    ax.add_patch(Polygon([
-        e,
-        e - a * np.array([math.cos(ang - 0.5), math.sin(ang - 0.5)]),
-        e - a * np.array([math.cos(ang + 0.5), math.sin(ang + 0.5)]),
-    ], closed=True, color=colour, alpha=0.9, zorder=3))
+def radio_card(ax, x, y):
+    w, h = 5.8, 2.3
+    ax.add_patch(FancyBboxPatch(
+        (x - w / 2, y - h / 2), w, h,
+        boxstyle="round,pad=0.02,rounding_size=0.24",
+        linewidth=1.8, edgecolor=AMBER, facecolor="#fffaf1", zorder=4))
+    draw_emoji(ax, "📡", x, y + 0.46, 1.05, AMBER)
+    ax.text(x, y - 0.42, "30 bytes, 30 times a second", color=AMBER,
+            fontsize=12.5, fontweight="bold", ha="center", va="center",
+            zorder=7)
+
+
+def arrow(ax, x0, y0, x1, y1, colour):
+    ax.annotate("", xy=(x1, y1), xytext=(x0, y0), zorder=3,
+                arrowprops=dict(arrowstyle="-|>,head_width=0.22,head_length=0.45",
+                                color=colour, linewidth=2.4, alpha=0.85,
+                                shrinkA=0, shrinkB=0))
 
 
 def hero(ax):
-    """Central identity + headline stats, filling the space the U flows around.
-
-    The lanes answer "how does it work"; this answers "what is it" and gives
-    the picture a focal point instead of a dead middle band. Every number here
-    is measured — the count is `pio test -e native` + the vision and sim
-    suites, not a claim.
-    """
-    x0, x1 = 6.6, W - 6.6
-    y0, y1 = 6.1, 9.9
+    x0, x1, y0, y1 = 2.0, 19.6, 6.8, 10.4
     cx = (x0 + x1) / 2
     ax.add_patch(FancyBboxPatch(
         (x0, y0), x1 - x0, y1 - y0,
-        boxstyle="round,pad=0.02,rounding_size=0.22",
-        linewidth=1.6, edgecolor="#d3d8e0", facecolor="#f7f8fb", zorder=3))
+        boxstyle="round,pad=0.02,rounding_size=0.30",
+        linewidth=1.6, edgecolor="#dfe3ea", facecolor="#f7f8fb", zorder=3))
     ax.add_patch(FancyBboxPatch(
-        (x0, y1 - 0.14), x1 - x0, 0.14,
+        (x0, y1 - 0.15), x1 - x0, 0.15,
         boxstyle="round,pad=0,rounding_size=0.05",
         linewidth=0, facecolor=INDIGO, zorder=4))
 
-    ax.text(cx, 9.25, "PCB-AS-AIRFRAME  ·  PERSON-FOLLOWING MICRO-DRONE",
-            color=INDIGO, fontsize=11, fontweight="bold", ha="center",
-            family="monospace", zorder=5)
-    ax.text(cx, 8.45, "PURSUIT-1", color=INK, fontsize=34, fontweight="bold",
+    ax.text(cx, 9.72, "PURSUIT-1", color=INK, fontsize=38, fontweight="bold",
             ha="center", va="center", zorder=5)
-    ax.text(cx, 7.65,
-            "A 92 mm circuit board that is its own airframe — it follows one "
-            "enrolled person by face re-identification.",
-            color=MUTE, fontsize=11.5, ha="center", va="center", zorder=5)
+    ax.text(cx, 8.82,
+            "A 92 mm circuit board that is its own airframe.\n"
+            "It follows one person — the one it was shown.",
+            color=MUTE, fontsize=13, ha="center", va="center", zorder=5,
+            linespacing=1.6)
 
     stats = [("66 g", "all-up weight"), ("337", "tests, all green"),
-             ("1 kHz", "flight control loop"), ("25 fps", "vision, on a laptop")]
+             ("1 kHz", "balance loop"), ("25 fps", "vision")]
     for i, (big, lab) in enumerate(stats):
         sx = x0 + (x1 - x0) * (i + 0.5) / len(stats)
-        ax.text(sx, 6.95, big, color=INDIGO, fontsize=21, fontweight="bold",
+        ax.text(sx, 7.70, big, color=INDIGO, fontsize=21, fontweight="bold",
                 ha="center", va="center", zorder=5)
-        ax.text(sx, 6.42, lab.upper(), color=FAINT, fontsize=8.5, ha="center",
+        ax.text(sx, 7.20, lab.upper(), color=FAINT, fontsize=8.5, ha="center",
                 va="center", zorder=5, family="monospace")
         if i:
-            ax.plot([sx - (x1 - x0) / len(stats) / 2] * 2, [6.35, 7.05],
-                    color="#dfe3ea", linewidth=1, zorder=4)
+            ax.plot([sx - (x1 - x0) / len(stats) / 2] * 2, [7.12, 7.85],
+                    color="#e3e7ed", linewidth=1, zorder=4)
 
 
 def main():
     fig, ax = plt.subplots(figsize=(W, H))
-    fig.patch.set_facecolor(BG); ax.set_facecolor(BG)
-    ax.set_xlim(0, W); ax.set_ylim(0, H); ax.axis("off")
+    fig.patch.set_facecolor(BG)
+    ax.set_facecolor(BG)
+    ax.set_xlim(0, W)
+    ax.set_ylim(0, H)
+    ax.axis("off")
 
-    ax.text(1.0, H - 0.7, "PURSUIT-1   ·   THE RUNTIME PATH", color=INDIGO,
-            fontsize=12.5, fontweight="bold", family="monospace")
-    ax.text(1.0, H - 1.5, "One camera frame becomes four motor commands",
-            color=INK, fontsize=25, fontweight="bold")
+    ax.text(1.2, H - 0.9, "PURSUIT-1  ·  HOW IT WORKS", color=INDIGO,
+            fontsize=13, fontweight="bold", family="monospace")
+    ax.text(1.2, H - 1.85, "A drone that follows one person, in six steps",
+            color=INK, fontsize=27, fontweight="bold")
 
-    ax.text(2.7, Y[0] + NH / 2 + 0.62, "ON THE LAPTOP  ·  perception + control",
-            color=INDIGO, fontsize=12, fontweight="bold")
-    ax.text(W - 2.7, Y[2] - NH / 2 - 0.78,
-            "ON THE AIRCRAFT  ·  1 kHz flight loop", color=GREEN,
-            fontsize=12, fontweight="bold", ha="right")
+    # Right-aligned on purpose: left-aligned they land under the title and
+    # over the footer rule respectively, which is exactly what happened first.
+    ax.text(XS[-1] + NW / 2, Y[0] + NH / 2 + 0.5, "ON THE LAPTOP",
+            color=INDIGO, fontsize=12.5, fontweight="bold", ha="right")
+    ax.text(XS[-1] + NW / 2, Y[2] - NH / 2 - 0.62, "ON THE DRONE",
+            color=GREEN, fontsize=12.5, fontweight="bold", ha="right")
 
     hero(ax)
 
-    xs = layout()
-    order = list(range(len(STAGES)))
-    for a, b in zip(order, order[1:]):
-        link(ax, xs[a], xs[b], STAGES[b][4])
-    for i, (num, title, role, sub, colour, _) in enumerate(STAGES):
-        node(ax, xs[i][0], xs[i][1], num, title, role, sub, colour)
+    top = [s for s in STEPS if s[4] == 0]
+    bot = [s for s in STEPS if s[4] == 2]
 
-    ax.plot([1.0, W - 1.0], [0.68, 0.68], color="#e2e6ec", linewidth=1)
-    ax.text(1.0, 0.34, "github.com/Pai-88/pursuit-drone", color=FAINT,
-            fontsize=10, family="monospace")
-    ax.text(W - 1.0, 0.34, "never flown · boards in fabrication",
-            color=FAINT, fontsize=10, ha="right")
+    for i, (ch, t, line, colour, _) in enumerate(top):
+        card(ax, XS[i], Y[0], ch, t, line, colour)
+    # bottom flows right -> left, so the numbering keeps travelling forward
+    for i, (ch, t, line, colour, _) in enumerate(bot):
+        card(ax, XS[len(XS) - 1 - i], Y[2], ch, t, line, colour)
 
-    out = __file__.rsplit("/", 1)[0] + "/pursuit_process_map.png"
-    fig.savefig(out, dpi=170, facecolor=BG, bbox_inches="tight",
-                pad_inches=0.25)
+    radio_card(ax, *RADIO)
+
+    # top lane, left to right
+    for a, b in zip(XS, XS[1:]):
+        arrow(ax, a + NW / 2 + 0.12, Y[0], b - NW / 2 - 0.12, Y[0], INDIGO)
+    # down through the radio
+    arrow(ax, RADIO[0], Y[0] - NH / 2 - 0.12, RADIO[0], RADIO[1] + 1.27, AMBER)
+    arrow(ax, RADIO[0], RADIO[1] - 1.27, RADIO[0], Y[2] + NH / 2 + 0.12, GREEN)
+    # bottom lane, right to left
+    for a, b in zip(XS[::-1], XS[::-1][1:]):
+        arrow(ax, a - NW / 2 - 0.12, Y[2], b + NW / 2 + 0.12, Y[2], GREEN)
+
+    ax.plot([1.2, W - 1.2], [0.95, 0.95], color="#e6eaef", linewidth=1)
+    ax.text(1.2, 0.52, "github.com/Pai-88/pursuit-drone", color=FAINT,
+            fontsize=11, family="monospace")
+    ax.text(W - 1.2, 0.52, "never flown · boards in fabrication",
+            color=FAINT, fontsize=11, ha="right")
+
+    out = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       "pursuit_process_map.png")
+    fig.savefig(out, dpi=150, facecolor=BG, bbox_inches="tight",
+                pad_inches=0.3)
     print("wrote", out)
 
 
