@@ -118,6 +118,49 @@ def link(ax, p0, p1, colour):
     ], closed=True, color=colour, alpha=0.9, zorder=3))
 
 
+def hero(ax):
+    """Central identity + headline stats, filling the space the U flows around.
+
+    The lanes answer "how does it work"; this answers "what is it" and gives
+    the picture a focal point instead of a dead middle band. Every number here
+    is measured — the count is `pio test -e native` + the vision and sim
+    suites, not a claim.
+    """
+    x0, x1 = 6.6, W - 6.6
+    y0, y1 = 6.1, 9.9
+    cx = (x0 + x1) / 2
+    ax.add_patch(FancyBboxPatch(
+        (x0, y0), x1 - x0, y1 - y0,
+        boxstyle="round,pad=0.02,rounding_size=0.22",
+        linewidth=1.6, edgecolor="#d3d8e0", facecolor="#f7f8fb", zorder=3))
+    ax.add_patch(FancyBboxPatch(
+        (x0, y1 - 0.14), x1 - x0, 0.14,
+        boxstyle="round,pad=0,rounding_size=0.05",
+        linewidth=0, facecolor=INDIGO, zorder=4))
+
+    ax.text(cx, 9.25, "PCB-AS-AIRFRAME  ·  PERSON-FOLLOWING MICRO-DRONE",
+            color=INDIGO, fontsize=11, fontweight="bold", ha="center",
+            family="monospace", zorder=5)
+    ax.text(cx, 8.45, "PURSUIT-1", color=INK, fontsize=34, fontweight="bold",
+            ha="center", va="center", zorder=5)
+    ax.text(cx, 7.65,
+            "A 92 mm circuit board that is its own airframe — it follows one "
+            "enrolled person by face re-identification.",
+            color=MUTE, fontsize=11.5, ha="center", va="center", zorder=5)
+
+    stats = [("66 g", "all-up weight"), ("337", "tests, all green"),
+             ("1 kHz", "flight control loop"), ("25 fps", "vision, on a laptop")]
+    for i, (big, lab) in enumerate(stats):
+        sx = x0 + (x1 - x0) * (i + 0.5) / len(stats)
+        ax.text(sx, 6.95, big, color=INDIGO, fontsize=21, fontweight="bold",
+                ha="center", va="center", zorder=5)
+        ax.text(sx, 6.42, lab.upper(), color=FAINT, fontsize=8.5, ha="center",
+                va="center", zorder=5, family="monospace")
+        if i:
+            ax.plot([sx - (x1 - x0) / len(stats) / 2] * 2, [6.35, 7.05],
+                    color="#dfe3ea", linewidth=1, zorder=4)
+
+
 def main():
     fig, ax = plt.subplots(figsize=(W, H))
     fig.patch.set_facecolor(BG); ax.set_facecolor(BG)
@@ -133,6 +176,8 @@ def main():
     ax.text(W - 2.7, Y[2] - NH / 2 - 0.78,
             "ON THE AIRCRAFT  ·  1 kHz flight loop", color=GREEN,
             fontsize=12, fontweight="bold", ha="right")
+
+    hero(ax)
 
     xs = layout()
     order = list(range(len(STAGES)))
