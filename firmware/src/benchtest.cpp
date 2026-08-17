@@ -123,6 +123,8 @@ void bench_print_help(void)
     Serial.println(" s         sensor + battery + link report");
     Serial.println(" e         camera exposure: flight (dark, blur-proof) "
                    "<-> bench (bright)");
+    Serial.println(" v         video: close (SVGA, face ID) <-> range (VGA, "
+                   "35% less bitrate)");
     Serial.println(" +  -      motor test duty up / down");
     Serial.println(" x         stop everything");
     Serial.println(" h         this help");
@@ -172,6 +174,25 @@ bool bench_key(char c, const BenchDeps &d)
     case 's':
         g_mode = Mode::Sensors;
         return true;
+    case 'v': {
+        /* Video is a couple of Mbps against ~7 kbps of command traffic, so it
+         * is what collapses first as range opens up. RANGE trades the
+         * resolution that face recognition needs -- and which stops working
+         * past 3.4 m anyway -- for a measured 35% CUT in bitrate. Not
+         * persisted: a reboot comes back at SVGA. */
+        const bool to_range = !camera_range_mode();
+        if (!camera_set_range_mode(to_range)) {
+            Serial.println("video: no camera");
+        } else {
+            if (to_range)
+                Serial.printf("video: RANGE  VGA 640x480 q%d  ~35%% less "
+                              "bitrate  <- NO face ID\n", CAM_QUALITY_RANGE);
+            else
+                Serial.printf("video: CLOSE  SVGA 800x600 q%d  face ID to "
+                              "3.4m\n", CAM_QUALITY_CLOSE);
+        }
+        return true;
+    }
     case 'e': {
         /* Flight biases hard toward a SHORT exposure because motion blur is
          * what kills the detector, and pays for it with gain. On a bench
@@ -311,11 +332,12 @@ void bench_update(uint32_t now_ms, const BenchDeps &d)
                           d.baro ? d.baro->last_error() : "not wired",
                           ALT_CEILING_TOF_M);
         }
-        Serial.printf("  camera     %s   exposure %+d (%s)\n",
+        Serial.printf("  camera     %s   exposure %+d (%s)   video %s\n",
                       camera_ready() ? "OK" : "absent",
                       camera_exposure_bias(),
                       camera_exposure_bias() == CAM_AE_LEVEL_BENCH
-                          ? "bench" : "flight");
+                          ? "bench" : "flight",
+                      camera_range_mode() ? "RANGE (VGA)" : "CLOSE (SVGA)");
         bench_print_loop_timing();
         Serial.println("---------------------\n");
         g_mode = Mode::Off;

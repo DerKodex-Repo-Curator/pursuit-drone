@@ -147,10 +147,16 @@ static void attitude_update(float dt_s)
 static void link_begin(void)
 {
     WiFi.mode(WIFI_AP);
-    WiFi.softAP(AP_SSID, AP_PASS);
+    /* Channel is chosen, not defaulted — see WIFI_AP_CHANNEL in config.h.
+     * Arguments after the passphrase are (channel, hidden, max_connections):
+     * one client, because a second station on this AP is either a mistake or
+     * someone else, and both share the airtime the control link needs. */
+    WiFi.softAP(AP_SSID, AP_PASS, WIFI_AP_CHANNEL, 0, 1);
+    WiFi.setTxPower(WIFI_TX_POWER);
     g_udp.begin(PURSUIT_CMD_PORT);
-    Serial.printf("AP %s  ip %s  cmd:%u telem:%u\n", AP_SSID,
-                  WiFi.softAPIP().toString().c_str(),
+    Serial.printf("AP %s  ip %s  ch%u  txpwr %.1f dBm  cmd:%u telem:%u\n",
+                  AP_SSID, WiFi.softAPIP().toString().c_str(),
+                  (unsigned)WIFI_AP_CHANNEL, WiFi.getTxPower() * 0.25f,
                   PURSUIT_CMD_PORT, PURSUIT_TELEM_PORT);
 }
 

@@ -27,6 +27,7 @@ volatile uint32_t g_frames = 0;
 volatile uint32_t g_clients = 0;
 const char *g_err = "";
 int g_ae_level = CAM_AE_LEVEL_FLIGHT;
+bool g_range_mode = false;
 WiFiServer *g_server = nullptr;
 
 const char *BOUNDARY = "pursuitframe";
@@ -130,7 +131,7 @@ bool camera_begin(uint16_t port)
      * `face.min_face_px` to 24 — that keeps face acquisition usable to ~3.1m.
      */
     cfg.frame_size = FRAMESIZE_SVGA;
-    cfg.jpeg_quality = 12;
+    cfg.jpeg_quality = CAM_QUALITY_CLOSE;
     cfg.fb_count = 2;                       /* double-buffer, no tearing */
     cfg.fb_location = CAMERA_FB_IN_PSRAM;
     cfg.grab_mode = CAMERA_GRAB_LATEST;     /* newest frame, never a queue */
@@ -221,6 +222,31 @@ bool camera_set_exposure_bias(int level)
 
 int camera_exposure_bias(void) { return g_ae_level; }
 
+bool camera_set_range_mode(bool on)
+{
+    sensor_t *s = esp_camera_sensor_get();
+    if (!s) return false;
+    /* Frame size first: the driver reallocates the framebuffers on this call,
+     * and setting quality against the old geometry is silently discarded. */
+    if (s->set_framesize(s, on ? FRAMESIZE_VGA : FRAMESIZE_SVGA) != 0)
+        return false;
+    /* Quality AFTER frame size: the driver reallocates framebuffers on the
+     * size change, and a quality set against the old geometry is discarded.
+     *
+     * Measured 2026-08-16, A/B over the live stream: SVGA q12 -> VGA q26 gave
+     * 2.61 -> 1.70 Mbps, a 35% saving. Essentially all of it is pixel count
+     * (VGA/SVGA = 0.64); moving the quantiser 18 -> 26 moved the bitrate ~5%.
+     * That is NOT the API failing -- set_quality returns 0 and status.quality
+     * updates -- it is the test scene: a near-black frame has almost no
+     * high-frequency content for a coarser quantiser to discard. Expect the
+     * quantiser to contribute more on a detailed outdoor scene. */
+    s->set_quality(s, on ? CAM_QUALITY_RANGE : CAM_QUALITY_CLOSE);
+    g_range_mode = on;
+    return true;
+}
+
+bool camera_range_mode(void) { return g_range_mode; }
+
 bool camera_ready(void) { return g_ready; }
 uint32_t camera_frames(void) { return g_frames; }
 uint32_t camera_clients(void) { return g_clients; }
@@ -231,6 +257,8 @@ const char *camera_error(void) { return g_err; }
 bool camera_begin(uint16_t) { return false; }
 bool camera_ready(void) { return false; }
 bool camera_set_exposure_bias(int) { return false; }
+bool camera_set_range_mode(bool) { return false; }
+bool camera_range_mode(void) { return false; }
 int camera_exposure_bias(void) { return 0; }
 uint32_t camera_frames(void) { return 0; }
 uint32_t camera_clients(void) { return 0; }

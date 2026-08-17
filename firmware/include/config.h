@@ -124,6 +124,40 @@
 #define CAM_AE_LEVEL_FLIGHT  (-2)
 #define CAM_AE_LEVEL_BENCH   (2)
 
+/* ---- radio link ----------------------------------------------------------
+ * CHANNEL. softAP() with no channel lands on 1, which in any built-up area is
+ * the most congested of the three non-overlapping 2.4GHz channels (1, 6, 11).
+ * Outdoors the limit on this link is almost never transmit power — it is other
+ * people's networks — so picking a quiet channel buys more usable range than
+ * anything else free. 6 is the middle one and the least likely to sit under a
+ * neighbouring router's skirts. Change it if a scan shows 6 is busy where you
+ * fly; the laptop follows the AP, so nothing else needs to know.
+ *
+ * TX POWER. The Arduino default is already at or near maximum, so setting it
+ * explicitly buys little — but it removes a silent dependency on whatever the
+ * core happens to default to this release.
+ */
+#define WIFI_AP_CHANNEL   6
+#define WIFI_TX_POWER     WIFI_POWER_19_5dBm
+
+/* ---- video bitrate vs range ----------------------------------------------
+ * The video stream is ~1.6 Mbps; the command packets are ~7 kbps. Video is
+ * 200x heavier and is what collapses first as range opens up, taking the
+ * framerate and the latency with it.
+ *
+ * RANGE mode trades resolution for link margin. MEASURED on the live stream,
+ * 2026-08-16: SVGA q12 2.61 Mbps -> VGA q26 1.70 Mbps, a 35% saving, at an
+ * unchanged ~25 fps. It costs face recognition, which past 3.4 m does not work
+ * anyway — so at the distance where you would want this, you are spending
+ * bandwidth on something you cannot use.
+ *
+ * Deliberately a runtime toggle, not a new default: the close-in work that
+ * the aircraft is actually FOR needs SVGA, and a reboot must come back ready
+ * for it.
+ */
+#define CAM_QUALITY_CLOSE  12
+#define CAM_QUALITY_RANGE  26
+
 /* ---- battery protection -------------------------------------------------
  * The XIAO's 3V3 comes from an SGM6029C buck that drops out around 3.5V in.
  * SPICE puts the pack at 3.61V during a four-motor full-throttle burst with

@@ -45,4 +45,21 @@ const char *camera_error(void);
 bool camera_set_exposure_bias(int level);
 int camera_exposure_bias(void);
 
+/* Trade resolution for link margin.
+ *
+ * The video stream is a couple of Mbps against ~7 kbps of command traffic, so
+ * video is what collapses first as range opens up. RANGE mode (VGA, coarser
+ * quantiser) measured 35% less: 2.61 -> 1.70 Mbps at an unchanged ~25 fps.
+ *
+ * The cost is face recognition, which needs ~28 px across a face and
+ * therefore stops working past 3.4 m regardless — so at the distance where
+ * you would reach for this, the resolution was buying nothing. Body re-ID and
+ * person detection are unaffected: a person is still ~88 px tall at 10 m.
+ *
+ * NOT persisted. A reboot comes back at SVGA, because the close-in work the
+ * aircraft exists for is the work that needs it.
+ */
+bool camera_set_range_mode(bool on);
+bool camera_range_mode(void);
+
 #endif /* PURSUIT_CAMERA_H */
