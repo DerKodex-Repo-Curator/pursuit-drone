@@ -33,7 +33,9 @@ AltHoldConfig default_alt_hold_config()
     c.max_throttle = 0.90f;
     /* Starting guess for hover on this airframe: T:W ~1.6 means hover sits
      * near 1/1.6 of full thrust, and thrust is roughly quadratic in throttle,
-     * so ~sqrt(1/1.6) ~ 0.62 once sag is allowed for. It only has to be in
+     * so ~sqrt(1/1.6) ~ 0.79 once sag is allowed for. (Was 0.62 -- that was
+     * 1/1.6 with the square root omitted; corrected 2026-08-18.) It only has to
+     * be in
      * the right neighbourhood; the learner takes it from there. */
     return c;
 }
@@ -49,7 +51,7 @@ float pursuit_clamp_alt_setpoint(float requested_m, bool baro_present,
 
 AltitudeHold::AltitudeHold()
     : c_(default_alt_hold_config()),
-      hover_(0.62f), integral_(0.0f), sp_m_(0.0f),
+      hover_(0.79f), integral_(0.0f), sp_m_(0.0f),
       prev_height_(0.0f), climb_ms_(0.0f), primed_(false), holding_(false)
 {
 }
@@ -75,7 +77,7 @@ void AltitudeHold::arm(float current_height_m)
 
 void AltitudeHold::reset_learning()
 {
-    hover_ = 0.62f;
+    hover_ = 0.79f;
 }
 
 float AltitudeHold::update(float target_m, float height_m, bool have_height,

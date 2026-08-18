@@ -184,8 +184,15 @@
  * The same mapping applies to gyro and accel — any rigid mounting is a
  * permutation with signs, identical for both.
  */
-#define IMU_ORIENT_X(x, y, z) (x)
-#define IMU_ORIENT_Y(x, y, z) (y)
+/* Determined on real hardware via the bench 'o' test, 2026-08-18: the fitted
+ * ICM-42688-P sits rotated 180 deg in yaw relative to the USB-C-forward body
+ * frame. Flat reads +1g on Z (up is correct), but right-edge-down gave
+ * NEGATIVE roll and nose-down gave NEGATIVE pitch with the identity map -- both
+ * backwards, which flips the aircraft on take-off. A 180 deg yaw is X->-X,
+ * Y->-Y, Z unchanged, applied identically to accel and gyro. Re-verified after
+ * the change: right-edge-down -> +roll, nose-down -> +pitch. */
+#define IMU_ORIENT_X(x, y, z) (-(x))
+#define IMU_ORIENT_Y(x, y, z) (-(y))
 #define IMU_ORIENT_Z(x, y, z) (z)
 
 #endif /* PURSUIT_CONFIG_H */
