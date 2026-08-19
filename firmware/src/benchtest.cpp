@@ -7,6 +7,9 @@
 
 #include "battery.h"
 #include "blackbox.h"
+
+void prof_report(void);
+void prof_reset(void);
 #include "bmp390.h"
 #include "camera.h"
 #include "config.h"
@@ -223,6 +226,7 @@ void bench_print_help(void)
                    "35% less bitrate)");
     Serial.println(" +  -      motor test duty up / down");
     Serial.println(" d         dump the flight log as CSV over USB");
+    Serial.println(" p         loop section profile (which part is slow)");
     Serial.println(" x         stop everything");
     Serial.println(" h         this help");
     Serial.println("");
@@ -328,6 +332,10 @@ bool bench_key(char c, const BenchDeps &d)
         return true;
     case 'd':
         blackbox_dump_csv();
+        return true;
+    case 'p':
+        prof_report();
+        prof_reset();
         return true;
     case 'h':
         bench_print_help();

@@ -117,36 +117,102 @@ static constexpr float ANGLE_KP = 6.0f;
 static float g_imu_bad_s = 0.0f;
 static bool g_imu_loss_declared = false;
 
-/* Median of five, because a single sample is not trustworthy while the
- * motors switch.
+/* One conversion normally; a median of three only when the reading looks
+ * wrong.
  *
  * The divider is 100k/100k, so the ADC sees a 50 kOhm source; Espressif want
- * well under 10 kOhm for the sample-and-hold to settle. It is marginal even
- * in silence, and 32 kHz motor PWM pushes it over. Measured 2026-08-20: the
- * raw channel returned 1.70 V at 0% duty and 0.00 V mid-run, on a pack a
- * meter put at 3.64 V.
+ * well under 10 kOhm for the sample-and-hold to settle. It is marginal in
+ * silence, and 32 kHz motor PWM pushes it over. Measured 2026-08-20: the raw
+ * channel returned 1.70 V at 0% duty and 0.00 V mid-run, on a pack a meter
+ * put at 3.64 V.
  *
- * A median rather than a mean on purpose. The corruption is impulsive — a few
- * wildly wrong samples among good ones — and a mean folds those outliers into
- * the answer, while a median of five discards up to two of them outright.
- * Averaging noise like this is how you get a number that is smooth, stable,
- * and wrong.
+ * This started as an unconditional median of five, which the loop profiler
+ * then showed costs ~810us every time it fires -- one analogReadMilliVolts is
+ * ~162us, and landing five of them on top of a 515us attitude update was
+ * itself producing the 1.3ms loop overruns. Paying that on every sample to
+ * catch a glitch that happens some of the time is the wrong trade.
  *
- * Costs five conversions at BATT_HZ (50Hz), not per loop. */
-static float read_pack_volts(void)
+ * So: take one. If it agrees with what the filter already believes, trust it.
+ * Only when it disagrees by more than a pack can actually move in one 20ms
+ * sample interval do we spend two more conversions and take the median. The
+ * common path is one conversion; the glitch path is three.
+ *
+ * A median rather than a mean, because the corruption is impulsive -- a mean
+ * folds the outlier into the answer, a median discards it.
+ *
+ * 0.25V of tolerance: real sag under a throttle step is gradual across the
+ * 20ms sample period, while the glitches seen were whole volts adrift. */
+static float read_pack_volts(float believed_v)
 {
-    float s[5];
-    for (int i = 0; i < 5; i++) {
-        s[i] = (float)analogReadMilliVolts(PIN_VBAT_SENSE) * 1e-3f *
-               VBAT_DIVIDER;
+    const float a = (float)analogReadMilliVolts(PIN_VBAT_SENSE) * 1e-3f *
+                    VBAT_DIVIDER;
+    if (fabsf(a - believed_v) <= 0.25f) return a;
+
+    const float b = (float)analogReadMilliVolts(PIN_VBAT_SENSE) * 1e-3f *
+                    VBAT_DIVIDER;
+    const float c = (float)analogReadMilliVolts(PIN_VBAT_SENSE) * 1e-3f *
+                    VBAT_DIVIDER;
+    /* median of three, branchlessly enough */
+    const float lo = fminf(a, fminf(b, c));
+    const float hi = fmaxf(a, fmaxf(b, c));
+    return a + b + c - lo - hi;
+}
+
+/* --- loop section profiler (bring-up, 2026-08-20) ------------------------
+ * 3.5% of iterations were exceeding the 1ms budget (worst 1.31ms) with no
+ * attribution. Guessing was already wrong once: the obvious suspects were the
+ * absent ToF and barometer being polled against a dead I2C bus, but both
+ * drivers early-return on !present_/!ready_, so they cost nothing.
+ *
+ * prof_lap() charges the time since the previous lap to a slot, so the slots
+ * partition the loop exactly and must sum to the loop period. micros() is a
+ * couple of cycles on the S3, so the instrument does not move what it
+ * measures at this granularity. */
+enum { PROF_INPUT, PROF_ATT, PROF_BARO, PROF_TOF, PROF_BATT,
+       PROF_CTRL, PROF_BB, PROF_TELEM, PROF_N };
+
+static const char *PROF_NAME[PROF_N] = {
+    "serial+link", "attitude", "baro", "tof", "battery",
+    "(unused)", "control+bbox", "telemetry",
+};
+
+static uint32_t g_prof_max[PROF_N];
+static uint64_t g_prof_sum[PROF_N];
+static uint32_t g_prof_laps = 0;
+static uint32_t g_prof_mark = 0;
+
+static inline void prof_start(void) { g_prof_mark = micros(); }
+
+static inline void prof_lap(int slot)
+{
+    const uint32_t now = micros();
+    const uint32_t d = now - g_prof_mark;
+    if (d > g_prof_max[slot]) g_prof_max[slot] = d;
+    g_prof_sum[slot] += d;
+    g_prof_mark = now;
+}
+
+void prof_report(void)
+{
+    if (!g_prof_laps) { Serial.println("  profiler: no laps yet"); return; }
+    Serial.println("\n--- loop section profile ---");
+    /* Read WORST, not mean. bench_active() returns early from loop() before
+     * the last two laps, so those slots see fewer laps than the counter — the
+     * means are deflated for them. The maxima are unaffected, and overruns are
+     * a worst-case question anyway. */
+    Serial.println("  section        mean_us   WORST_us");
+    for (int i = 0; i < PROF_N; i++) {
+        Serial.printf("  %-12s %8.1f %10lu\n", PROF_NAME[i],
+                      (double)g_prof_sum[i] / (double)g_prof_laps,
+                      (unsigned long)g_prof_max[i]);
     }
-    for (int i = 1; i < 5; i++) {          /* insertion sort, n=5 */
-        const float k = s[i];
-        int j = i - 1;
-        while (j >= 0 && s[j] > k) { s[j + 1] = s[j]; j--; }
-        s[j + 1] = k;
-    }
-    return s[2];
+    Serial.printf("  (%lu laps)\n\n", (unsigned long)g_prof_laps);
+}
+
+void prof_reset(void)
+{
+    for (int i = 0; i < PROF_N; i++) { g_prof_max[i] = 0; g_prof_sum[i] = 0; }
+    g_prof_laps = 0;
 }
 
 static void attitude_update(float dt_s)
@@ -460,6 +526,9 @@ void loop(void)
     /* Bench console. Only ever reachable while IDLE — bench_key() and
      * bench_update() both re-check the state, so a command arriving mid-test
      * cancels it rather than racing it. */
+    prof_start();
+    g_prof_laps++;
+
     static BenchDeps bench{&g_state, &g_imu, &g_ahrs, &g_batt, &g_tof, &g_baro};
     while (Serial.available()) {
         const char c = (char)Serial.read();
@@ -472,7 +541,11 @@ void loop(void)
     g_state.tick(now_ms);
     bench_update(now_ms, bench);
 
+    prof_lap(PROF_INPUT);
+
     attitude_update(dt_s);
+
+    prof_lap(PROF_ATT);
 
     /* Barometer at its own rate, pushed in RAW on its own datum — the fusion
      * filter subtracts a reference captured at arming, so an absolute
@@ -497,6 +570,8 @@ void loop(void)
     /* Rangefinder at its own rate — it only produces a new sample at 30Hz,
      * and the attitude is passed in so the reading can be projected back onto
      * the vertical before anything acts on it. */
+    prof_lap(PROF_BARO);
+
     if (now_ms - last_tof_ms >= 1000 / TOF_HZ) {
         const float tof_dt =
             fminf((float)(now_ms - last_tof_ms) * 1e-3f, 0.2f);
@@ -516,8 +591,10 @@ void loop(void)
         }
     }
 
+    prof_lap(PROF_TOF);
+
     if (now_ms - last_batt_ms >= 1000 / BATT_HZ) {
-        const float v = read_pack_volts();
+        const float v = read_pack_volts(g_batt.instant_volts());
         g_batt.update(v, (float)(now_ms - last_batt_ms) * 1e-3f);
         last_batt_ms = now_ms;
 
@@ -536,6 +613,8 @@ void loop(void)
      * matter: whatever error it carries lands in the offset and is subtracted
      * again. That is the whole point of learning an offset instead of
      * trusting a datum. */
+    prof_lap(PROF_BATT);
+
     static bool was_enabled = false;
     const bool motors_on = g_state.motors_enabled();
     if (motors_on && !was_enabled) g_altfuse.arm(g_baro_alt_m);
@@ -707,6 +786,8 @@ void loop(void)
         }
     }
 
+    prof_lap(PROF_BB);
+
     digitalWrite(PIN_LED_CTRL,
                  g_state.motors_enabled() ? ((now_ms / 100) & 1) : LOW);
 
@@ -714,6 +795,8 @@ void loop(void)
         telemetry_send(now_ms);
         last_telem_ms = now_ms;
     }
+
+    prof_lap(PROF_TELEM);
 
     g_loop_count++;
     if (now_ms - last_hz_ms >= 1000) {
