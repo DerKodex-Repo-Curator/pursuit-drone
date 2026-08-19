@@ -209,6 +209,46 @@ void blackbox_dump_csv(void)
     Serial.printf("#end (%lu records)\n\n", (unsigned long)n);
 }
 
+/* Drive each motor gate pin as a plain GPIO, high, one at a time.
+ *
+ * Added 2026-08-20, when all four motors went silent at once and a meter read
+ * 0V across M1 with VBAT healthy at 3.6V on J1. That narrows it to gate drive,
+ * but not to a cause: a dead MCU pin, a broken header joint and a
+ * misconfigured LEDC peripheral all look identical from the motor's end.
+ *
+ * This bypasses LEDC entirely. digitalWrite through the Arduino GPIO path is
+ * about as simple as the ESP32 gets, so if a pin still will not go high the
+ * fault is the pin or the joint, not the PWM setup. And a steady 3.3V DC is
+ * far easier to read on a multimeter than the ~1.15V average of a 35% duty
+ * cycle, which is easy to mistake for noise.
+ *
+ * Restores LEDC afterwards -- motors_begin() reattaches the channels, and the
+ * pins are left low. */
+void gate_pin_test(void)
+{
+    const int pins[4] = {PIN_M1_PWM, PIN_M2_PWM, PIN_M3_PWM, PIN_M4_PWM};
+    const char *names[4] = {"M1 (D0)", "M2 (D1)", "M3 (D3)", "M4 (D8)"};
+
+    Serial.println("\n>>> GATE PIN TEST — PROPS OFF");
+    Serial.println("    Each pin is driven HIGH for 4s. Meter it against GND:");
+    Serial.println("      ~3.3V  the MCU is driving — fault is downstream");
+    Serial.println("      ~0V    nothing coming out of this pin\n");
+
+    for (int i = 0; i < 4; i++) {
+        pinMode(pins[i], OUTPUT);
+        digitalWrite(pins[i], HIGH);
+        Serial.printf("    %s  HIGH  (gpio %d) — measure now\n",
+                      names[i], pins[i]);
+        delay(4000);
+        digitalWrite(pins[i], LOW);
+    }
+
+    /* Hand the pins back to the PWM peripheral. */
+    motors_begin();
+    motors_stop();
+    Serial.println("\n    done — LEDC restored, motors stopped\n");
+}
+
 void bench_print_help(void)
 {
     Serial.println("\n=================== BENCH TEST — PROPS OFF ==========="
@@ -227,6 +267,7 @@ void bench_print_help(void)
     Serial.println(" +  -      motor test duty up / down");
     Serial.println(" d         dump the flight log as CSV over USB");
     Serial.println(" p         loop section profile (which part is slow)");
+    Serial.println(" g         drive each motor gate pin HIGH (meter it)");
     Serial.println(" x         stop everything");
     Serial.println(" h         this help");
     Serial.println("");
@@ -336,6 +377,9 @@ bool bench_key(char c, const BenchDeps &d)
     case 'p':
         prof_report();
         prof_reset();
+        return true;
+    case 'g':
+        gate_pin_test();
         return true;
     case 'h':
         bench_print_help();
