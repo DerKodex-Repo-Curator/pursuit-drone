@@ -139,7 +139,17 @@ jobs:
         # biometric data under UK GDPR and are not anonymous for being floats.
         run: |
           fail=0
-          if git ls-files | grep -E '\.npz$'; then
+          # Any tracked .npz is suspicious, EXCEPT ml/runs/, which .gitignore
+          # documents as deliberately tracked training artefacts. Without that
+          # exclusion this gate failed on every run for eval.npz, and a check
+          # that is always red is a check nobody reads -- which is how a real
+          # embedding slipped through on 2026-08-20.
+          #
+          # Grep the full path, not a bare *.npz: the gitignore rule
+          # vision/targets/*.npz does not match subdirectories, so an embedding
+          # moved into vision/targets/sessions/ is NOT ignored and this is the
+          # only thing standing between it and a public repository.
+          if git ls-files | grep -E '\.npz$' | grep -vE '^ml/runs/'; then
             echo "::error::a face embedding is tracked"; fail=1
           fi
           if git ls-files | grep -E 'firmware/include/secrets\.h$'; then
