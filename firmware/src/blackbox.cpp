@@ -209,6 +209,16 @@ uint32_t blackbox_count(void) { return g_count; }
 uint32_t blackbox_dropped(void) { return g_dropped; }
 uint32_t blackbox_capacity(void) { return g_cap; }
 
+/* Same ring arithmetic as the HTTP server: if the buffer has wrapped, the
+ * oldest surviving record is the one sitting at the write head. */
+bool blackbox_peek(uint32_t i, BlackboxRecord *out)
+{
+    if (!g_buf || i >= g_count) return false;
+    const uint32_t start = (g_count >= g_cap) ? g_head : 0;
+    *out = g_buf[(start + i) % g_cap];
+    return true;
+}
+
 #else  /* PURSUIT_HOST_BUILD — a plain heap ring, so the tests can drive it */
 
 #include <cstdlib>

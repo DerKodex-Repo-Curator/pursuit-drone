@@ -6,6 +6,7 @@
 #include <cmath>
 
 #include "battery.h"
+#include "blackbox.h"
 #include "bmp390.h"
 #include "camera.h"
 #include "config.h"
@@ -153,6 +154,58 @@ void bench_print_loop_timing(void)
     }
 }
 
+/* Dump the flight log as CSV over USB, oldest record first.
+ *
+ * The blackbox already serves over WiFi at 192.168.4.1:82, but reading it that
+ * way means leaving your own network and joining the aircraft's AP after every
+ * single hop. That friction is why flight logs go unread. On the bench the USB
+ * cable is already attached, so this is the path that will actually get used.
+ *
+ * Scales are the inverse of bb_scale_* in blackbox.h. Emitted as text rather
+ * than the packed 40-byte record because the point is to paste it into
+ * something that plots, not to save four bytes. */
+void blackbox_dump_csv(void)
+{
+    const uint32_t n = blackbox_count();
+    if (n == 0) {
+        Serial.println("blackbox empty — nothing recorded yet. Recording "
+                       "starts on arming and stops on landing, so a bench "
+                       "session that never armed has no log.");
+        return;
+    }
+
+    Serial.printf("\n#PURSUIT-1 blackbox, %lu records, %lu overwritten\n",
+                  (unsigned long)n, (unsigned long)blackbox_dropped());
+    Serial.println("t_s,gx,gy,gz,roll,pitch,yaw,sp_roll,sp_pitch,sp_yawrate,"
+                   "pid_r,pid_p,pid_y,m1,m2,m3,m4,thr,vbat,alt_mm,state,"
+                   "flags,loop_us");
+
+    BlackboxRecord r;
+    for (uint32_t i = 0; i < n; i++) {
+        if (!blackbox_peek(i, &r)) break;
+        Serial.printf(
+            "%.4f,%.2f,%.2f,%.2f,%.3f,%.3f,%.3f,%.3f,%.3f,%.2f,"
+            "%.4f,%.4f,%.4f,%.3f,%.3f,%.3f,%.3f,%.3f,%.2f,%u,%u,%u,%u\n",
+            r.t_us * 1e-6,
+            r.gyro[0] * 2000.0f / 32767.0f, r.gyro[1] * 2000.0f / 32767.0f,
+            r.gyro[2] * 2000.0f / 32767.0f,
+            r.att[0] * 180.0f / 32767.0f, r.att[1] * 180.0f / 32767.0f,
+            r.att[2] * 180.0f / 32767.0f,
+            r.sp[0] * 180.0f / 32767.0f, r.sp[1] * 180.0f / 32767.0f,
+            r.sp[2] * 2000.0f / 32767.0f,
+            r.pid[0] / 32767.0f, r.pid[1] / 32767.0f, r.pid[2] / 32767.0f,
+            r.motor[0] / 255.0f, r.motor[1] / 255.0f, r.motor[2] / 255.0f,
+            r.motor[3] / 255.0f, r.throttle / 255.0f, r.vbat / 50.0f,
+            (unsigned)r.alt_mm, (unsigned)r.state, (unsigned)r.flags,
+            (unsigned)r.loop_us);
+        /* The USB CDC buffer is not deep enough for 500Hz of text arriving in
+         * a tight loop. Yielding periodically lets it drain rather than drop
+         * lines — a log with silent holes is worse than no log. */
+        if ((i & 0x3F) == 0) delay(1);
+    }
+    Serial.printf("#end (%lu records)\n\n", (unsigned long)n);
+}
+
 void bench_print_help(void)
 {
     Serial.println("\n=================== BENCH TEST — PROPS OFF ==========="
@@ -169,6 +222,7 @@ void bench_print_help(void)
     Serial.println(" v         video: close (SVGA, face ID) <-> range (VGA, "
                    "35% less bitrate)");
     Serial.println(" +  -      motor test duty up / down");
+    Serial.println(" d         dump the flight log as CSV over USB");
     Serial.println(" x         stop everything");
     Serial.println(" h         this help");
     Serial.println("");
@@ -271,6 +325,9 @@ bool bench_key(char c, const BenchDeps &d)
         stop_all();
         g_mode = Mode::Off;
         Serial.println("bench test stopped");
+        return true;
+    case 'd':
+        blackbox_dump_csv();
         return true;
     case 'h':
         bench_print_help();

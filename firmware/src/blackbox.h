@@ -89,8 +89,10 @@ int16_t bb_scale_unit(float u);
 uint8_t bb_scale_duty(float d);
 uint8_t bb_scale_volts(float v);
 
-#ifdef PURSUIT_HOST_BUILD
+/* Read back a stored record, oldest-first. Available on the target as well as
+ * the host: the only other way off the board is the WiFi download, and joining
+ * the aircraft's AP after every hop is exactly the friction that stops anyone
+ * actually looking at their logs. */
 bool blackbox_peek(uint32_t i, BlackboxRecord *out);
-#endif
 
 #endif /* PURSUIT_BLACKBOX_H */
