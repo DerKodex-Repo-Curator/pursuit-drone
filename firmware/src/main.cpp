@@ -119,8 +119,41 @@ static bool g_imu_loss_declared = false;
 
 static void attitude_update(float dt_s)
 {
-    g_imu_sample = g_imu.read();
-    if (!g_imu_sample.valid) {
+    /* Read into a LOCAL and publish it only once it is known good.
+     *
+     * Found by inspection 2026-08-19: this used to assign g_imu.read()
+     * straight into g_imu_sample and test .valid afterwards. A failed burst
+     * read returns a value-initialised ImuSample (icm42688.cpp builds
+     * `ImuSample s{}` over a plain aggregate with no default member
+     * initialisers), so every axis is 0.0 — and that zeroed sample was
+     * already in the global by the time anyone asked whether it was real.
+     * Madgwick was correctly spared by the early return below, but NOTHING
+     * between here and mix_quad_x() re-checks validity, so the rate PIDs were
+     * handed 0.0 deg/s as a measurement of the airframe's actual rotation.
+     *
+     * That is not a benign zero. pid.cpp rejects only non-finite values, so
+     * 0.0f sails through, and it differentiates on the MEASUREMENT — a
+     * real-rate -> 0 -> real-rate round trip is two large steps in
+     * d(measurement)/dt. The kick is kd*|rate|/(rc+dt) = 0.0164 per deg/s
+     * against the 0.5 limit passed below: saturated above ~30 deg/s, and
+     * still 16-66% of full roll authority at a mundane 5-20 deg/s, on a
+     * single dropped I2C transaction. Coasting on the previous sample is
+     * ~1 ms stale at loop rate; that is a far smaller lie than zero.
+     *
+     * The validity test MUST be on the local `s`, not on the global. Writing
+     * `if (s.valid) g_imu_sample = s;` and then testing g_imu_sample.valid
+     * would leave the global's flag stuck true from the last good read: the
+     * accumulator below would never advance, the emergency_land() would be
+     * unreachable, and a totally dead IMU would fly on a frozen sample
+     * forever — worse than the bug this fixes.
+     *
+     * Deliberately NOT resetting the rate PIDs on the recovery edge:
+     * RatePid::reset() also zeroes integral_, which would dump the
+     * accumulated hover trim every time a single read was dropped. The
+     * recovery step is the genuine rate change the D term should see.
+     */
+    const ImuSample s = g_imu.read();
+    if (!s.valid) {
         /* Flying on a frozen attitude estimate is unrecoverable: the PID
          * holds whatever correction it last computed while the aircraft
          * drifts out from under it. */
@@ -134,6 +167,7 @@ static void attitude_update(float dt_s)
         }
         return;
     }
+    g_imu_sample = s;
     g_imu_bad_s = 0.0f;
     g_imu_loss_declared = false;
 

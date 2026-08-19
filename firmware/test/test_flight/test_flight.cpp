@@ -318,6 +318,122 @@ void test_disarming_in_flight_lands_rather_than_dropping(void)
     TEST_ASSERT_EQUAL_UINT8(PURSUIT_STATE_LANDING, fs.state());
 }
 
+/* --- LANDING is sticky, and LANDING ends ---------------------------------
+ *
+ * These three pin the 2026-08-19 fixes. Both failures were in the same state
+ * and pulled in opposite directions: a repeated fault cut the descent short
+ * after one tick, and nothing ever ended the descent at all. */
+
+void test_repeated_emergency_land_stays_in_landing(void)
+{
+    /* A flat pack latches critical, so main.cpp calls emergency_land() on
+     * every battery tick — 50Hz, forever. Before the fix the second call fell
+     * through to the else branch and drove LANDING -> IDLE, cutting the
+     * motors after a single 20 ms tick of controlled descent. */
+    FlightState fs;
+    fs.sensors_ready();
+    pursuit_cmd_t c;
+    fill_cmd(&c, 1, 0, 0, 0, 1.0f, ARMED_HOLD);
+    fs.on_packet((uint8_t *)&c, sizeof(c), 1000);
+    fill_cmd(&c, 2, 0, 0, 0, 1.0f, ARMED_HOLD);
+    fs.on_packet((uint8_t *)&c, sizeof(c), 1033);
+    TEST_ASSERT_EQUAL_UINT8(PURSUIT_STATE_FLYING, fs.state());
+
+    fs.emergency_land();
+    TEST_ASSERT_EQUAL_UINT8(PURSUIT_STATE_LANDING, fs.state());
+
+    /* 50 more calls — one second of a latched fault at the battery tick
+     * rate. The descent must survive all of them. */
+    for (int i = 0; i < 50; i++) {
+        fs.emergency_land();
+        TEST_ASSERT_EQUAL_UINT8(PURSUIT_STATE_LANDING, fs.state());
+        TEST_ASSERT_TRUE(fs.motors_enabled());
+    }
+}
+
+void test_landing_times_out_to_disarmed_but_not_early(void)
+{
+    /* LANDING was terminal: disarm() had no callers, and there was no
+     * timeout, so the aircraft descended and then sat on the ground with the
+     * props turning until the pack was flat. */
+    FlightState fs;
+    fs.sensors_ready();
+    pursuit_cmd_t c;
+    fill_cmd(&c, 1, 0, 0, 0, 1.0f, ARMED_HOLD);
+    fs.on_packet((uint8_t *)&c, sizeof(c), 1000);
+    fill_cmd(&c, 2, 0, 0, 0, 1.0f, ARMED_HOLD);
+    fs.on_packet((uint8_t *)&c, sizeof(c), 1033);
+    TEST_ASSERT_EQUAL_UINT8(PURSUIT_STATE_FLYING, fs.state());
+
+    fs.emergency_land();
+    TEST_ASSERT_EQUAL_UINT8(PURSUIT_STATE_LANDING, fs.state());
+
+    /* Descent must actually get to run. Cutting early is the fall this whole
+     * state exists to avoid, so the interesting half of this test is the
+     * half that asserts NOTHING happens. */
+    for (uint32_t t = 1066; t < 1066 + 1900; t += 10) {
+        fs.tick(t);
+        TEST_ASSERT_EQUAL_UINT8(PURSUIT_STATE_LANDING, fs.state());
+        TEST_ASSERT_TRUE(fs.motors_enabled());
+    }
+
+    /* ...and then it must end. */
+    for (uint32_t t = 1066 + 1900; t <= 1066 + 2600; t += 10) fs.tick(t);
+    TEST_ASSERT_EQUAL_UINT8(PURSUIT_STATE_IDLE, fs.state());
+    TEST_ASSERT_FALSE(fs.motors_enabled());
+}
+
+void test_landing_times_out_even_if_the_link_never_worked(void)
+{
+    /* IMU loss or a flat pack can put the aircraft into LANDING on a flight
+     * where no command was ever accepted, leaving last_cmd_ms_ at 0. tick()
+     * returns early on that, so a timer placed after the guard would never
+     * run — the one case where a stuck LANDING has no operator to notice. */
+    FlightState bench;
+    bench.sensors_ready();
+    pursuit_cmd_t c;
+    fill_cmd(&c, 1, 0, 0, 0, 1.0f, ARMED_HOLD);
+    bench.on_packet((uint8_t *)&c, sizeof(c), 0);   /* clock still at zero */
+    bench.emergency_land();
+    TEST_ASSERT_EQUAL_UINT8(PURSUIT_STATE_LANDING, bench.state());
+
+    for (uint32_t t = 0; t <= 2600; t += 10) bench.tick(t);
+    TEST_ASSERT_EQUAL_UINT8(PURSUIT_STATE_IDLE, bench.state());
+    TEST_ASSERT_FALSE(bench.motors_enabled());
+}
+
+void test_a_disarm_packet_cannot_cut_a_landing_short(void)
+{
+    /* The mirror image of the timeout: the arm bit is a HELD control, so the
+     * operator releasing it is exactly how a landing is commanded — and if
+     * the released bit also exited LANDING, letting go would cut the motors
+     * mid-air. Only the timeout may end this state. */
+    FlightState fs;
+    fs.sensors_ready();
+    pursuit_cmd_t c;
+    fill_cmd(&c, 1, 0, 0, 0, 1.0f, ARMED_HOLD);
+    fs.on_packet((uint8_t *)&c, sizeof(c), 1000);
+    fill_cmd(&c, 2, 0, 0, 0, 1.0f, ARMED_HOLD);
+    fs.on_packet((uint8_t *)&c, sizeof(c), 1033);
+    TEST_ASSERT_EQUAL_UINT8(PURSUIT_STATE_FLYING, fs.state());
+
+    /* Button released: descend. */
+    fill_cmd(&c, 3, 0, 0, 0, 1.0f, PURSUIT_FLAG_ALT_HOLD);
+    fs.on_packet((uint8_t *)&c, sizeof(c), 1066);
+    TEST_ASSERT_EQUAL_UINT8(PURSUIT_STATE_LANDING, fs.state());
+
+    /* It stays released — 30Hz of disarmed packets for the next half second,
+     * every one of which must leave the descent running. */
+    uint32_t seq = 4;
+    for (uint32_t t = 1099; t < 1600; t += 33, seq++) {
+        fill_cmd(&c, seq, 0, 0, 0, 1.0f, PURSUIT_FLAG_ALT_HOLD);
+        fs.on_packet((uint8_t *)&c, sizeof(c), t);
+        fs.tick(t);
+        TEST_ASSERT_EQUAL_UINT8(PURSUIT_STATE_LANDING, fs.state());
+        TEST_ASSERT_TRUE(fs.motors_enabled());
+    }
+}
+
 void test_armed_state_holds_idle_throttle(void)
 {
     /* A spring-centred stick rests at half travel, so without this gate the
@@ -419,6 +535,10 @@ int main(int, char **)
     RUN_TEST(test_failsafe_flag_holds_but_does_not_land);
     RUN_TEST(test_setpoints_are_clamped_to_flight_limits);
     RUN_TEST(test_disarming_in_flight_lands_rather_than_dropping);
+    RUN_TEST(test_repeated_emergency_land_stays_in_landing);
+    RUN_TEST(test_landing_times_out_to_disarmed_but_not_early);
+    RUN_TEST(test_landing_times_out_even_if_the_link_never_worked);
+    RUN_TEST(test_a_disarm_packet_cannot_cut_a_landing_short);
     RUN_TEST(test_armed_state_holds_idle_throttle);
 
     RUN_TEST(test_full_pack_gets_full_authority);

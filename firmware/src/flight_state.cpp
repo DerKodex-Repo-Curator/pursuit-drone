@@ -13,6 +13,28 @@ constexpr uint32_t LINK_TIMEOUT_MS = PURSUIT_LINK_TIMEOUT_MS;
 /* Still silent this long and the aircraft puts itself down. */
 constexpr uint32_t LAND_TIMEOUT_MS = 3000;
 
+/* How long LANDING is allowed to last before the motors are cut.
+ *
+ * LANDING had no exit at all until 2026-08-19: disarm() had zero callers in
+ * src/, there was no timeout and no landed-detection, so every one of the
+ * three paths into it (link silence past LAND_TIMEOUT_MS, a deliberate disarm
+ * in flight, IMU loss) parked the aircraft in a state it could never leave.
+ * It would descend under the throttle cap in main.cpp and then sit on the
+ * ground with the props turning until the pack was flat.
+ *
+ * Two seconds, not ten. The descent runs at hover*0.80, and under that cap
+ * this airframe reaches the ground from any height it can legally hold long
+ * before ten seconds are up — a ten-second timer would just be ten seconds of
+ * props spinning on the floor.
+ *
+ * Deliberately elapsed time in state and not a landed detector: the obvious
+ * detector (fused height near zero and climb rate settled) is blind on this
+ * board, because the ToF is NOT FITTED and alt_hold.cpp freezes climb_ms_
+ * whenever have_height is false. It would go quiet at exactly the moment it
+ * had to fire. A dumb timer cannot be fooled by a missing sensor.
+ */
+constexpr uint32_t LANDING_TIMEOUT_MS = 2000;
+
 float clampf(float v, float lo, float hi)
 {
     if (!std::isfinite(v)) return 0.0f;
@@ -29,6 +51,8 @@ FlightState::FlightState()
       have_seq_(false),
       sensors_ok_(false),
       setpoint_{},
+      landing_since_ms_(0),
+      landing_timing_(false),
       accepted_(0),
       rejected_(0),
       stale_(0)
@@ -79,8 +103,22 @@ void FlightState::emergency_land()
      * told the sensors had passed when they had not. */
     if (state_ == PURSUIT_STATE_BOOT) return;
 
+    /* LANDING is in this list because this call is REPEATED, not one-shot.
+     * Found by inspection 2026-08-19: main.cpp calls emergency_land() on
+     * every battery tick (50Hz) while critical() is true, and critical()
+     * LATCHES — battery.cpp never clears it, and Battery::reset() is only
+     * called from setup(). With LANDING missing from this list the second
+     * call fell through to the else and drove LANDING -> IDLE, which clears
+     * motors_enabled() and cuts the motors. So a flat pack gave exactly ONE
+     * 20 ms tick of controlled descent and then dropped the aircraft — this
+     * function turning into the fall it exists to prevent. The same one-tick
+     * cut applied to the repeated IMU-loss call.
+     *
+     * Already landing is already the correct response to a new fault; the
+     * state must be sticky against a fault that keeps re-reporting itself.
+     * LANDING's own exit is the timeout in tick(), not this. */
     if (state_ == PURSUIT_STATE_ARMED || state_ == PURSUIT_STATE_FLYING ||
-        state_ == PURSUIT_STATE_FAILSAFE) {
+        state_ == PURSUIT_STATE_FAILSAFE || state_ == PURSUIT_STATE_LANDING) {
         enter(PURSUIT_STATE_LANDING);
     } else {
         enter(PURSUIT_STATE_IDLE);
@@ -177,7 +215,39 @@ bool FlightState::on_packet(const uint8_t *buf, uint32_t len, uint32_t now_ms)
 
 void FlightState::tick(uint32_t now_ms)
 {
-    if (state_ == PURSUIT_STATE_BOOT || state_ == PURSUIT_STATE_IDLE) return;
+    if (state_ == PURSUIT_STATE_BOOT || state_ == PURSUIT_STATE_IDLE) {
+        landing_timing_ = false;
+        return;
+    }
+
+    /* --- the way out of LANDING -----------------------------------------
+     * Timed from the first tick that observes the state rather than from
+     * enter(), because enter() has no clock — at loop rate that costs one
+     * pass. The clock is started here and NOT in the branch below on purpose:
+     * two of the three routes into LANDING (a battery-critical or IMU-loss
+     * emergency_land() before the laptop has ever been heard from) leave
+     * last_cmd_ms_ at 0, and the guard that follows would return before any
+     * timer downstream of it ever ran. A landing timeout that only works if
+     * the link once worked is not a timeout.
+     *
+     * Everything below still runs while landing, so a link that goes silent
+     * mid-descent still gets its setpoint zeroed. */
+    if (state_ == PURSUIT_STATE_LANDING) {
+        if (!landing_timing_) {
+            landing_timing_ = true;
+            landing_since_ms_ = now_ms;
+        } else if ((uint32_t)(now_ms - landing_since_ms_)
+                       >= LANDING_TIMEOUT_MS) {
+            /* Descent is over: cut. disarm() rather than enter(IDLE) so the
+             * sequence number is dropped too — the next flight must not
+             * inherit this one's window. */
+            disarm();
+            return;
+        }
+    } else {
+        landing_timing_ = false;
+    }
+
     if (last_cmd_ms_ == 0) return;
 
     const uint32_t silent = now_ms - last_cmd_ms_;

@@ -22,6 +22,7 @@
  *                         still silent    |  (LAND_TIMEOUT_MS)
  *                                         v
  *                                      LANDING --> IDLE
+ *                                                (LANDING_TIMEOUT_MS)
  *
  * The rules that make this safe rather than merely tidy:
  *
@@ -97,6 +98,13 @@ private:
     bool     sensors_ok_;
 
     Setpoint setpoint_;
+
+    /* When the current LANDING began, and whether that clock is running.
+     * Started by tick() rather than enter() because enter() has no clock;
+     * cleared on any state that is not LANDING so a second landing gets a
+     * second full descent. */
+    uint32_t landing_since_ms_;
+    bool     landing_timing_;
 
     uint32_t accepted_;
     uint32_t rejected_;
