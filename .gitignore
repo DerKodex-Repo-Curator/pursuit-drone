@@ -4,6 +4,9 @@
 # the embeddings, which are biometric data under UK GDPR and are not anonymous
 # just because they look like a float array.
 vision/targets/*.npz
+# ...and any subdirectory. A bare *.npz glob does NOT match nested paths, and
+# moving a session into targets/sessions/ silently escaped it once (2026-08-20).
+vision/targets/**/*.npz
 vision/enrol/
 vision/captures/
 vision/camera_test.jpg
