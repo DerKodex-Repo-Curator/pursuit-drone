@@ -73,6 +73,20 @@ def screen_aspect() -> float | None:
 
 
 def open_source(cfg: Config, source: str | None):
+    """Returns (cap, label, live, mirror).
+
+    `mirror` is NOT the same question as `live`, and conflating them was a bug.
+    A laptop webcam faces the operator, so mirroring it makes left/right read
+    naturally while you test. The drone's camera faces AWAY from the operator
+    and is already in the airframe's frame of reference -- mirroring that feed
+    puts a target on the aircraft's left into the right of the image, and the
+    control loop then steers away from the person it is trying to follow.
+
+    Until 2026-08-20 the flip was gated on `live`, which is true for a network
+    stream as well as a webcam, so pointing --source at the drone would have
+    inverted every lateral correction. Never caught because the pipeline had
+    only ever been run against a webcam.
+    """
     # In flight the frames arrive as an MJPEG stream from the drone's own
     # camera, not from a local device, so a configured URL wins over the
     # webcam default. The command-line --source still overrides both.
@@ -94,7 +108,7 @@ def open_source(cfg: Config, source: str | None):
         if (got_w, got_h) != (cfg.source.width, cfg.source.height):
             label += (f"  (asked {cfg.source.width}x{cfg.source.height} — "
                       f"camera has no such mode)")
-        live = True
+        live, mirror = True, cfg.source.flip
     elif source.startswith(("http://", "https://", "rtsp://", "udp://")):
         cap = cv2.VideoCapture(source)
         # A network stream buffers by default, which on a control loop means
@@ -104,17 +118,18 @@ def open_source(cfg: Config, source: str | None):
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         except Exception:
             pass
-        label, live = source, True
+        # A remote stream is the aircraft's own view: never mirrored.
+        label, live, mirror = source, True, False
     elif source.isdigit():
         cap = cv2.VideoCapture(int(source))
-        label, live = f"camera {source}", True
+        label, live, mirror = f"camera {source}", True, cfg.source.flip
     else:
         cap = cv2.VideoCapture(source)
-        label, live = source, False
+        label, live, mirror = source, False, False
 
     if not cap.isOpened():
         raise SystemExit(f"could not open {label}")
-    return cap, label, live
+    return cap, label, live, mirror
 
 
 def main() -> int:
@@ -161,7 +176,7 @@ def main() -> int:
         except ValueError:
             raise SystemExit(f"--res wants WxH, e.g. 1920x1080 (got {args.res})")
 
-    cap, label, live = open_source(cfg, args.source)
+    cap, label, live, mirror = open_source(cfg, args.source)
     pipe = Pipeline(cfg, target_name=args.target)
 
     link = DroneLink(cfg.link)
@@ -225,7 +240,7 @@ def main() -> int:
         running = False
     signal.signal(signal.SIGINT, stop)
 
-    print(f"source: {label}")
+    print(f"source: {label}{'  [mirrored]' if mirror else ''}")
     print(f"target: {args.target or 'ANY enrolled face'}")
     print(f"link:   {'ON -> %s:%d' % (cfg.link.host, cfg.link.port) if link.enabled else 'OFF (test mode, nothing transmitted)'}")
     print(f"{'headless' if args.headless else 'press q to quit'}\n")
@@ -237,7 +252,7 @@ def main() -> int:
                 if live:
                     continue
                 break
-            if live and cfg.source.flip:
+            if mirror:
                 frame = cv2.flip(frame, 1)
 
             if not paused:
