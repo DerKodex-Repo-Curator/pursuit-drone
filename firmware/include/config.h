@@ -138,6 +138,12 @@
  * core happens to default to this release.
  */
 #define WIFI_AP_CHANNEL   6
+
+/* How long to wait for an existing network before giving up and hosting the
+ * SoftAP. Only used when PURSUIT_STA_SSID is defined in secrets.h. Long enough
+ * for a normal DHCP join, short enough that a bench boot with the router off
+ * is not a noticeable wait. */
+#define PURSUIT_STA_TIMEOUT_MS  8000
 #define WIFI_TX_POWER     WIFI_POWER_19_5dBm
 
 /* ---- video bitrate vs range ----------------------------------------------

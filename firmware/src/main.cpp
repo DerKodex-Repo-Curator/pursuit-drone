@@ -278,6 +278,108 @@ static void attitude_update(float dt_s)
 
 static void link_begin(void)
 {
+    /* --- bench convenience: join an existing network if one is configured ---
+     *
+     * The aircraft's normal mode is SoftAP, so it does not depend on a router
+     * being present in a field. That is right for flying and wrong for the
+     * bench: joining the aircraft's own AP costs the laptop its internet
+     * connection, so every camera stream, blackbox download and telemetry
+     * check means disconnecting from everything else first. Over a day of
+     * bring-up that friction is what stops tests getting run.
+     *
+     * If PURSUIT_STA_SSID is defined in secrets.h, try that network first and
+     * fall back to the AP after PURSUIT_STA_TIMEOUT_MS. The fallback is the
+     * point: leave the credentials defined and the aircraft still works in a
+     * field, because the join simply times out and the AP comes up as usual.
+     *
+     * Station mode changes the aircraft's address. It is printed at boot --
+     * do not assume 192.168.4.1.
+     */
+#ifdef PURSUIT_STA_SSID
+    WiFi.mode(WIFI_STA);
+    WiFi.setTxPower(WIFI_TX_POWER);
+    /* Station mode enables modem sleep by DEFAULT: the radio parks between
+     * DTIM beacons and every packet waits for the next wake-up. Measured
+     * 2026-08-20: 80 ms round-trip on a quiet LAN, against 1-5 ms with it off.
+     * That is a power-saving feature for sensors and a hazard for a control
+     * link -- the whole point of this loop is that a command reaches the
+     * aircraft while it is still the right command. SoftAP does not sleep,
+     * which is why the AP link never showed this. */
+    WiFi.setSleep(false);
+    WiFi.begin(PURSUIT_STA_SSID, PURSUIT_STA_PASS);
+    Serial.printf("joining %s ...\n", PURSUIT_STA_SSID);
+
+    const uint32_t t0 = millis();
+    while (WiFi.status() != WL_CONNECTED &&
+           millis() - t0 < PURSUIT_STA_TIMEOUT_MS) {
+        delay(100);
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+        g_udp.begin(PURSUIT_CMD_PORT);
+        Serial.printf("STA %s  ip %s  rssi %d dBm  txpwr %.1f dBm  "
+                      "cmd:%u telem:%u\n",
+                      PURSUIT_STA_SSID, WiFi.localIP().toString().c_str(),
+                      WiFi.RSSI(), WiFi.getTxPower() * 0.25f,
+                      PURSUIT_CMD_PORT, PURSUIT_TELEM_PORT);
+        Serial.println("  (bench mode: stream and blackbox are on THIS ip)");
+        return;
+    }
+    /* Say WHY, at the point of failure. The ESP32-S3 radio is 2.4 GHz ONLY,
+     * and a router that band-steers can leave a laptop happily on 5 GHz while
+     * the aircraft cannot see the network at all. That looks identical to a
+     * wrong password from here. */
+    {
+        const int st = (int)WiFi.status();
+        const char *why =
+            st == 1 ? "WL_NO_SSID_AVAIL — the radio never found that name" :
+            st == 4 ? "WL_CONNECT_FAILED — found it, but the join was refused" :
+            st == 6 ? "WL_DISCONNECTED — never got as far as associating" :
+                      "see WiFiType.h";
+        Serial.printf("  join failed after %u ms (status %d: %s)\n",
+                      (unsigned)PURSUIT_STA_TIMEOUT_MS, st, why);
+
+        /* Scan needs a settled STA mode; scanNetworks() returns a NEGATIVE
+         * error code, not a count, and -2 is "scan failed". Reporting that as
+         * "0 networks" would be inventing evidence of absence. */
+        WiFi.disconnect(true);
+        delay(200);
+        WiFi.mode(WIFI_STA);
+        delay(200);
+        const int n = WiFi.scanNetworks(false, true);
+
+        if (n < 0) {
+            Serial.printf("  scan unavailable (%d) — cannot say whether the "
+                          "network is visible\n", n);
+        } else {
+            bool seen = false;
+            for (int i = 0; i < n; i++) {
+                if (WiFi.SSID(i) == String(PURSUIT_STA_SSID)) {
+                    seen = true;
+                    Serial.printf("  '%s' IS visible: ch%d, %d dBm\n",
+                                  PURSUIT_STA_SSID, WiFi.channel(i),
+                                  WiFi.RSSI(i));
+                    Serial.println("  -> radio sees it, so the join itself "
+                                   "failed: check the passphrase, or WPA3.");
+                }
+            }
+            if (!seen) {
+                Serial.printf("  '%s' not among %d networks on 2.4 GHz:\n",
+                              PURSUIT_STA_SSID, n);
+                for (int i = 0; i < n && i < 8; i++) {
+                    Serial.printf("      %-24s ch%-3d %d dBm\n",
+                                  WiFi.SSID(i).c_str(), WiFi.channel(i),
+                                  WiFi.RSSI(i));
+                }
+                Serial.println("  -> likely 5 GHz. This radio is 2.4 GHz only;"
+                               " use the 2.4 GHz SSID.");
+            }
+            WiFi.scanDelete();
+        }
+    }
+    WiFi.disconnect(true);
+#endif
+
     WiFi.mode(WIFI_AP);
     /* Channel is chosen, not defaulted — see WIFI_AP_CHANNEL in config.h.
      * Arguments after the passphrase are (channel, hidden, max_connections):

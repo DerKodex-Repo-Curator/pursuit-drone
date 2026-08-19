@@ -31,12 +31,31 @@ AltHoldConfig default_alt_hold_config()
     c.hover_learn_hz = 0.05f;   /* ~20s time constant */
     c.min_throttle = 0.15f;
     c.max_throttle = 0.90f;
-    /* Starting guess for hover on this airframe: T:W ~1.6 means hover sits
-     * near 1/1.6 of full thrust, and thrust is roughly quadratic in throttle,
-     * so ~sqrt(1/1.6) ~ 0.79 once sag is allowed for. (Was 0.62 -- that was
-     * 1/1.6 with the square root omitted; corrected 2026-08-18.) It only has to
-     * be in
-     * the right neighbourhood; the learner takes it from there. */
+    /* Hover throttle, MEASURED on the airframe 2026-08-20.
+     *
+     * Props on, board restrained, all four motors ramped in steps: the frame
+     * was straining and nearly free of the surface at 29% per motor. So hover
+     * is near 0.30.
+     *
+     * The previous 0.79 was never measured. It came from a T:W estimate of
+     * ~1.6 -- hover near sqrt(1/1.6) of full throttle -- and that 1.6 came in
+     * turn from the SPICE power model whose assumptions have now been
+     * contradicted twice on hardware. The real airframe is far better than
+     * that: hovering at ~30% throttle implies a thrust-to-weight nearer 3
+     * than 1.6.
+     *
+     * Getting this wrong upward is the dangerous direction. hover_ is the
+     * FEEDFORWARD -- what the loop commands before any correction -- so 0.79
+     * against a true 0.30 would open at more than double the throttle needed
+     * and take ~20 s (hover_learn_hz = 0.05) to learn back down. That is a
+     * launch, not a lift.
+     *
+     * Caveat on the number: it was measured on a pack sagging to 3.02 V under
+     * that load. Less voltage means less thrust per unit duty, so a CHARGED
+     * pack should hover somewhat below 0.30. 0.30 is therefore a slight
+     * overestimate -- re-measure once the pack is healthy. The learner trims
+     * from here either way; it only has to start in the right neighbourhood,
+     * and 0.30 is the right neighbourhood where 0.79 was not. */
     return c;
 }
 
@@ -51,7 +70,7 @@ float pursuit_clamp_alt_setpoint(float requested_m, bool baro_present,
 
 AltitudeHold::AltitudeHold()
     : c_(default_alt_hold_config()),
-      hover_(0.79f), integral_(0.0f), sp_m_(0.0f),
+      hover_(0.30f), integral_(0.0f), sp_m_(0.0f),
       prev_height_(0.0f), climb_ms_(0.0f), primed_(false), holding_(false)
 {
 }
@@ -77,7 +96,7 @@ void AltitudeHold::arm(float current_height_m)
 
 void AltitudeHold::reset_learning()
 {
-    hover_ = 0.79f;
+    hover_ = 0.30f;
 }
 
 float AltitudeHold::update(float target_m, float height_m, bool have_height,

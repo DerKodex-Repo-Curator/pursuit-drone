@@ -77,7 +77,11 @@ void test_bad_input_is_rejected(void)
 struct Airframe {
     float height = 0.0f;
     float vel = 0.0f;
-    float true_hover = 0.60f;
+    /* MEASURED 2026-08-20: props on, restrained, the frame was straining and
+     * nearly free of the surface at 29% per motor. The old 0.60/0.72 values
+     * here were chosen to sit near a hover_ of 0.79 that was itself never
+     * measured -- they modelled an airframe that does not exist. */
+    float true_hover = 0.30f;
 
     void step(float throttle, float dt) {
         const float accel = (throttle - true_hover) * 22.0f - vel * 1.6f;
@@ -95,7 +99,7 @@ void test_holds_a_commanded_height(void)
     alt.arm(af.height);
 
     for (int i = 0; i < 900; i++) {       /* 30 seconds */
-        const float t = alt.update(1.0f, af.height, true, 0.6f, DT);
+        const float t = alt.update(1.0f, af.height, true, 0.3f, DT);
         af.step(t, DT);
     }
     TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.12f, 1.0f, af.height,
@@ -109,16 +113,51 @@ void test_hover_throttle_is_learned(void)
      * the difference rather than manufacturing hover from its integrator. */
     AltitudeHold alt;
     Airframe af;
-    af.true_hover = 0.72f;
+    /* An airframe a little heavier than the baseline assumes. Close enough
+     * that the loop can hold station, which is the ONLY condition under which
+     * learning runs -- see the deadlock test below. */
+    af.true_hover = 0.38f;
     af.height = 1.0f;
     alt.arm(af.height);
 
     for (int i = 0; i < 3000; i++) {
-        const float t = alt.update(1.0f, af.height, true, 0.6f, DT);
+        const float t = alt.update(1.0f, af.height, true, 0.3f, DT);
         af.step(t, DT);
     }
-    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.08f, 0.72f, alt.hover_throttle(),
+    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.08f, 0.38f, alt.hover_throttle(),
         "hover throttle did not converge on the airframe's actual value");
+}
+
+void test_a_badly_wrong_baseline_is_NOT_rescued_by_the_learner(void)
+{
+    /* Documents a real limitation, discovered 2026-08-20 when correcting
+     * hover_ from an unmeasured 0.79 to a measured 0.30.
+     *
+     * Learning is gated on holding_ -- small error AND small climb rate. An
+     * airframe whose true hover is far from the baseline never settles, so
+     * holding_ never goes true, so the baseline never moves. The learner
+     * refines a nearly-right guess; it cannot rescue a wrong one.
+     *
+     * This is why hover_ must be MEASURED rather than modelled, and why
+     * getting it wrong upward is the dangerous direction: the loop opens at
+     * that throttle and has no mechanism to climb down from it quickly.
+     */
+    AltitudeHold alt;
+    Airframe af;
+    af.true_hover = 0.75f;        /* far above the 0.30 baseline */
+    af.height = 1.0f;
+    alt.arm(af.height);
+
+    for (int i = 0; i < 3000; i++) {
+        const float t = alt.update(1.0f, af.height, true, 0.3f, DT);
+        af.step(t, DT);
+    }
+    /* It gets nowhere near. Asserting the FAILURE so that if someone later
+     * makes the learner able to cross this gap, this test fails loudly and
+     * the comment above gets revisited rather than silently going stale. */
+    TEST_ASSERT_TRUE_MESSAGE(alt.hover_throttle() < 0.45f,
+        "learner unexpectedly crossed a large hover gap -- re-check the "
+        "claim that hover_ must start close");
 }
 
 void test_climb_does_not_corrupt_the_learned_hover(void)
@@ -284,6 +323,7 @@ int main(int, char **)
 
     RUN_TEST(test_holds_a_commanded_height);
     RUN_TEST(test_hover_throttle_is_learned);
+    RUN_TEST(test_a_badly_wrong_baseline_is_NOT_rescued_by_the_learner);
     RUN_TEST(test_climb_does_not_corrupt_the_learned_hover);
     RUN_TEST(test_setpoint_is_rate_limited);
     RUN_TEST(test_falls_back_when_the_rangefinder_drops_out);
