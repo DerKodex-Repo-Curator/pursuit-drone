@@ -43,7 +43,15 @@ void Battery::reset(float volts)
 
 void Battery::update(float volts, float dt_s)
 {
-    if (!std::isfinite(volts)) return;      /* a bad sample is not news */
+    if (!std::isfinite(volts)) { glitches_++; return; }
+
+    /* An impossible reading is the instrument, not the aircraft. Dropping it
+     * is the whole point: 0.0f is perfectly finite, so before this check a
+     * glitched sample went straight into the filters and dragged them down.
+     * That is how a healthy pack came to report 1.47 V over telemetry and
+     * trip emergency_land(). Counted, not silently swallowed — a rising
+     * glitch rate is itself the symptom worth seeing. */
+    if (volts < VBAT_SANE_MIN_V) { glitches_++; return; }
 
     if (!primed_) {
         reset(volts);

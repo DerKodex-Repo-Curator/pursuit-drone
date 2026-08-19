@@ -403,6 +403,11 @@ void bench_update(uint32_t now_ms, const BenchDeps &d)
         Serial.printf("  battery    %.2f V  %s\n", d.battery->volts(),
                       d.battery->volts() < 3.5f ? "(LOW — charge before "
                                                   "flying)" : "");
+        /* Rejected ADC samples. Zero at rest and climbing under motor PWM is
+         * the expected shape — see VBAT_SANE_MIN_V. Non-zero at REST would
+         * mean something new and worse. */
+        Serial.printf("  vbat ADC   %lu glitches rejected\n",
+                      (unsigned long)d.battery->glitches());
         Serial.printf("  rangefinder %s\n",
                       d.tof->available() ? "OK" : "absent (no altitude hold)");
         if (d.baro && d.baro->present()) {

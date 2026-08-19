@@ -117,6 +117,38 @@ static constexpr float ANGLE_KP = 6.0f;
 static float g_imu_bad_s = 0.0f;
 static bool g_imu_loss_declared = false;
 
+/* Median of five, because a single sample is not trustworthy while the
+ * motors switch.
+ *
+ * The divider is 100k/100k, so the ADC sees a 50 kOhm source; Espressif want
+ * well under 10 kOhm for the sample-and-hold to settle. It is marginal even
+ * in silence, and 32 kHz motor PWM pushes it over. Measured 2026-08-20: the
+ * raw channel returned 1.70 V at 0% duty and 0.00 V mid-run, on a pack a
+ * meter put at 3.64 V.
+ *
+ * A median rather than a mean on purpose. The corruption is impulsive — a few
+ * wildly wrong samples among good ones — and a mean folds those outliers into
+ * the answer, while a median of five discards up to two of them outright.
+ * Averaging noise like this is how you get a number that is smooth, stable,
+ * and wrong.
+ *
+ * Costs five conversions at BATT_HZ (50Hz), not per loop. */
+static float read_pack_volts(void)
+{
+    float s[5];
+    for (int i = 0; i < 5; i++) {
+        s[i] = (float)analogReadMilliVolts(PIN_VBAT_SENSE) * 1e-3f *
+               VBAT_DIVIDER;
+    }
+    for (int i = 1; i < 5; i++) {          /* insertion sort, n=5 */
+        const float k = s[i];
+        int j = i - 1;
+        while (j >= 0 && s[j] > k) { s[j + 1] = s[j]; j--; }
+        s[j + 1] = k;
+    }
+    return s[2];
+}
+
 static void attitude_update(float dt_s)
 {
     /* Read into a LOCAL and publish it only once it is known good.
@@ -485,8 +517,7 @@ void loop(void)
     }
 
     if (now_ms - last_batt_ms >= 1000 / BATT_HZ) {
-        const float v = (float)analogReadMilliVolts(PIN_VBAT_SENSE) * 1e-3f *
-                        VBAT_DIVIDER;
+        const float v = read_pack_volts();
         g_batt.update(v, (float)(now_ms - last_batt_ms) * 1e-3f);
         last_batt_ms = now_ms;
 

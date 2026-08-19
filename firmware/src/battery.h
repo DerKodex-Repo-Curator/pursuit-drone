@@ -45,12 +45,18 @@ public:
 
     void reset(float volts);
 
+    /* How many samples were thrown away as physically impossible. Rises only
+     * while motor PWM is running; a non-zero value at rest would mean
+     * something else is wrong. */
+    uint32_t glitches() const { return glitches_; }
+
 private:
     float fast_v_;
     float slow_v_;
     float scale_;
     bool  critical_;
     bool  primed_;
+    uint32_t glitches_ = 0;
 };
 
 /* Convert a raw ADC reading to pack volts through the 100k/100k divider.

@@ -164,6 +164,23 @@
  * an optimistic 60mR source model, so a real cell is worse. Without a limiter
  * the flight controller browns out in the air.
  */
+/* Below this the sample is the ADC lying, not the pack.
+ *
+ * Measured 2026-08-20: with motor PWM running, the ADC returned 1.70 V at 0%
+ * duty and 0.00 V during a sustained run — while the board was demonstrably
+ * alive and printing those very numbers over serial. Neither is physically
+ * reachable: the XIAO's buck needs 1.95 V in and cannot boost, so at 1.70 V
+ * there is no 3V3 rail and no firmware running to report anything.
+ *
+ * Cause is the sense divider. 100k/100k is a 50 kOhm source into an ADC whose
+ * sample-and-hold wants well under 10 kOhm; it barely settles when quiet, and
+ * 32 kHz motor switching nearby finishes it off. The divider was sized for
+ * low idle draw and paid for it in measurement integrity.
+ *
+ * 2.50 V, not 3.00: a genuinely collapsing pack must still be visible. This
+ * rejects the impossible, not the alarming. Anything above it is believed. */
+#define VBAT_SANE_MIN_V   2.50f
+
 #define VBAT_CRITICAL_V   3.40f  /* land now */
 #define VBAT_LOW_V        3.60f  /* start clamping throttle */
 #define VBAT_NOMINAL_V    3.85f  /* full authority above this */
