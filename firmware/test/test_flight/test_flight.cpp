@@ -511,6 +511,57 @@ void test_adc_scaling(void)
 
 /* ------------------------------------------------------------------- main */
 
+/* ------------------------------------------------- battery arming interlock */
+/* Added 2026-08-20, once the VBAT sense chain was proved trustworthy. Before
+ * the ADC glitch fix a phantom reading could have latched critical() and
+ * grounded a healthy aircraft, which is why this gate was deliberately held
+ * back until then. */
+void test_a_flat_pack_refuses_to_arm(void)
+{
+    FlightState fs;
+    fs.sensors_ready();
+    fs.set_battery_critical(true);
+
+    pursuit_cmd_t c;
+    fill_cmd(&c, 1, 0, 0, 0, 0.0f, ARMED_HOLD);
+    fs.on_packet((uint8_t *)&c, sizeof(c), 100);
+    TEST_ASSERT_EQUAL_UINT8(PURSUIT_STATE_IDLE, fs.state());
+    TEST_ASSERT_FALSE(fs.motors_enabled());
+}
+
+void test_the_interlock_does_not_block_a_healthy_pack(void)
+{
+    /* The gate must only ever refuse. If this regresses, nothing flies. */
+    FlightState fs;
+    fs.sensors_ready();
+    fs.set_battery_critical(false);
+
+    pursuit_cmd_t c;
+    fill_cmd(&c, 1, 0, 0, 0, 0.0f, ARMED_HOLD);
+    fs.on_packet((uint8_t *)&c, sizeof(c), 100);
+    TEST_ASSERT_EQUAL_UINT8(PURSUIT_STATE_ARMED, fs.state());
+}
+
+void test_a_flat_pack_does_not_oscillate_arm_to_land(void)
+{
+    /* The failure this exists to stop: arm packet -> ARMED, battery tick ->
+     * LANDING, timeout -> IDLE, still-held arm button -> ARMED, forever. */
+    FlightState fs;
+    fs.sensors_ready();
+    fs.set_battery_critical(true);
+
+    pursuit_cmd_t c;
+    uint32_t t = 100;
+    for (int i = 0; i < 200; i++) {        /* ~6.6s of held arm at 30Hz */
+        fill_cmd(&c, (uint8_t)(i + 1), 0, 0, 0, 0.0f, ARMED_HOLD);
+        fs.on_packet((uint8_t *)&c, sizeof(c), t);
+        fs.emergency_land();
+        fs.tick(t);
+        TEST_ASSERT_EQUAL_UINT8(PURSUIT_STATE_IDLE, fs.state());
+        t += 33;
+    }
+}
+
 int main(int, char **)
 {
     UNITY_BEGIN();
@@ -529,6 +580,9 @@ int main(int, char **)
     RUN_TEST(test_a_fault_cannot_promote_boot_to_idle);
     RUN_TEST(test_emergency_land_still_works_once_sensors_have_passed);
     RUN_TEST(test_arming_requires_the_flag_on_every_packet);
+    RUN_TEST(test_a_flat_pack_refuses_to_arm);
+    RUN_TEST(test_the_interlock_does_not_block_a_healthy_pack);
+    RUN_TEST(test_a_flat_pack_does_not_oscillate_arm_to_land);
     RUN_TEST(test_corrupt_packets_are_discarded);
     RUN_TEST(test_replayed_packets_are_ignored);
     RUN_TEST(test_watchdog_levels_off_then_lands);

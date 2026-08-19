@@ -193,6 +193,26 @@ bool FlightState::on_packet(const uint8_t *buf, uint32_t len, uint32_t now_ms)
 
     switch (state_) {
     case PURSUIT_STATE_IDLE:
+        /* Refuse to arm on a pack that is already flat.
+         *
+         * Without this, a latched-critical battery gives a ~2s oscillation:
+         * an arm packet takes IDLE -> ARMED, the next battery tick drives
+         * ARMED -> LANDING, the LANDING timeout disarms back to IDLE, and the
+         * still-held arm button starts it again. Motors spin for a couple of
+         * seconds each cycle, on the one pack that can least afford it.
+         *
+         * critical() is driven by the SLOW (2s) filtered voltage and latches,
+         * so a momentary sag under a throttle burst cannot trip this — only a
+         * pack that genuinely sits low. It clears on Battery::reset(), which
+         * runs in setup(); swapping the pack power-cycles the board anyway.
+         *
+         * Deliberately gated here and not in emergency_land(): this may only
+         * ever REFUSE to arm. A gate that can be talked into permitting
+         * something is not a safety gate. */
+        if (batt_critical_) {
+            rejected_++;
+            break;
+        }
         enter(PURSUIT_STATE_ARMED);
         break;
     case PURSUIT_STATE_ARMED: {

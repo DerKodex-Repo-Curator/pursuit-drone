@@ -69,6 +69,12 @@ public:
     /* Sensors have initialised and self-tested. */
     void sensors_ready();
 
+    /* Latched-flat pack. Pushed in from main() alongside emergency_land() so
+     * FlightState does not have to know what a Battery is. Refuses arming
+     * only — it can never permit anything. */
+    void set_battery_critical(bool c) { batt_critical_ = c; }
+    bool battery_critical() const { return batt_critical_; }
+
     /* Force a safe state — used by a low battery or a failed sensor. */
     void emergency_land();
     void disarm();
@@ -96,6 +102,7 @@ private:
     uint32_t last_seq_;
     bool     have_seq_;
     bool     sensors_ok_;
+    bool     batt_critical_ = false;
 
     Setpoint setpoint_;
 

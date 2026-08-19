@@ -522,6 +522,7 @@ void loop(void)
         last_batt_ms = now_ms;
 
         /* A flat pack is not a reason to keep flying and hope. */
+        g_state.set_battery_critical(g_batt.critical());
         if (g_batt.critical()) g_state.emergency_land();
     }
 
