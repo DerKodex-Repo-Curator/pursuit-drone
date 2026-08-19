@@ -20,7 +20,7 @@
 
 namespace {
 
-enum class Mode { Off, Motor, Orientation, Sensors };
+enum class Mode { Off, Motor, MotorAll, Orientation, Sensors };
 
 Mode g_mode = Mode::Off;
 int  g_motor = -1;              /* which motor is spinning, 0-3   */
@@ -31,6 +31,31 @@ uint32_t g_last_print = 0;
 /* Deliberately brief. A motor left spinning while you look away is how a
  * bare shaft finds a finger. */
 constexpr uint32_t MOTOR_RUN_MS = 2500;
+
+/* --- all four at once ----------------------------------------------------
+ * Added 2026-08-19. Until now there was NO way to run four motors together:
+ * 'a' called run_motor(0) and spun M1 alone, while the help text claimed it
+ * swept all four. So the largest current this airframe can draw had never
+ * once been demanded of the pack, and every four-motor figure in the docs
+ * was a single-motor measurement multiplied by four.
+ *
+ * RAMPED, not stepped. Four coreless motors going stopped -> duty inside one
+ * PWM period is the worst transient the board can produce, and the 3V3 rail
+ * has only ~8uF behind it (C6/C7 are deliberately DNF), so it falls 3.3->2.8V
+ * in ~9.5us. Battery protection samples at 50Hz and cannot see that; the ramp
+ * is what keeps the step inside what the rail can follow.
+ *
+ * The run aborts itself if the pack collapses past ALL_ABORT_V. That is below
+ * VBAT_CRITICAL_V on purpose — the point of this test is to find out how far
+ * it sags, so the abort is a backstop against a total collapse, not the
+ * measurement threshold. */
+constexpr uint32_t ALL_RAMP_MS = 1500;
+constexpr uint32_t ALL_RUN_MS  = 4000;
+constexpr float    ALL_ABORT_V = 3.00f;
+
+uint32_t g_all_start_ms = 0;
+float    g_vmin = 99.0f;        /* lowest instantaneous pack volts seen */
+float    g_vmin_duty = 0.0f;    /* ...and the per-motor duty it happened at */
 
 const char *MOTOR_NAME[4] = {
     "M1 FRONT-LEFT  (should spin CW,  seen from above)",
@@ -55,6 +80,22 @@ void run_motor(int i)
                   g_duty * 100.0f, MOTOR_RUN_MS / 1000.0f);
     Serial.println("    watch: is it the motor you expected, turning the way "
                    "the belly silk says?");
+}
+
+void run_all(void)
+{
+    g_mode = Mode::MotorAll;
+    g_motor = -1;
+    g_all_start_ms = millis();
+    g_vmin = 99.0f;
+    g_vmin_duty = 0.0f;
+    Serial.printf("\n>>> ALL FOUR MOTORS — ramping to %.0f%% over %.1fs, "
+                  "holding to %.1fs\n", g_duty * 100.0f,
+                  ALL_RAMP_MS / 1000.0f, ALL_RUN_MS / 1000.0f);
+    Serial.println("    PROPS OFF. This is the first time this board has ever "
+                   "run four at once.");
+    Serial.println("    watch: does the pack hold up, and does the board "
+                   "reset?\n");
 }
 
 void orientation_report(const BenchDeps &d)
@@ -117,7 +158,9 @@ void bench_print_help(void)
     Serial.println("\n=================== BENCH TEST — PROPS OFF ==========="
                    "=======");
     Serial.println(" 1 2 3 4   spin one motor for 2.5s");
-    Serial.println(" a         spin all four in sequence");
+    Serial.println(" a         spin M1 only (2.5s)");
+    Serial.println(" A         spin ALL FOUR together, ramped — the real "
+                   "power-path test");
     Serial.println(" o         orientation check (tilt the board, watch the "
                    "numbers)");
     Serial.println(" s         sensor + battery + link report");
@@ -161,6 +204,9 @@ bool bench_key(char c, const BenchDeps &d)
     case 'a':
         run_motor(0);
         g_mode = Mode::Motor;
+        return true;
+    case 'A':
+        run_all();
         return true;
     case 'o':
         g_mode = Mode::Orientation;
@@ -259,6 +305,63 @@ void bench_update(uint32_t now_ms, const BenchDeps &d)
         float *out[4] = {&m.m1, &m.m2, &m.m3, &m.m4};
         *out[g_motor] = g_duty;
         motors_write(m);
+        /* Print the battery WHILE the motor is actually turning. Polling it
+         * with 's' cannot work: that key switches the bench out of motor mode
+         * and stops the motor, so the sample is always taken with the load
+         * already removed. Cost a wasted bring-up session on 2026-08-19 —
+         * the reading looked reassuringly flat because nothing was loading
+         * the pack at the instant it was sampled. */
+        if (now_ms - g_last_print >= 200) {
+            g_last_print = now_ms;
+            Serial.printf("    MOTORLOAD vbat slow %.2f  fast %.2f  duty %.0f%%\n",
+                          d.battery->volts(), d.battery->instant_volts(),
+                          g_duty * 100.0f);
+        }
+        break;
+    }
+
+    case Mode::MotorAll: {
+        const uint32_t el = now_ms - g_all_start_ms;
+        if (el >= ALL_RUN_MS) {
+            stop_all();
+            g_mode = Mode::Off;
+            Serial.printf("\n    done. lowest pack voltage %.2f V at %.0f%% "
+                          "per motor\n", g_vmin, g_vmin_duty * 100.0f);
+            Serial.printf("    critical threshold is %.2f V — %s\n\n",
+                          VBAT_CRITICAL_V,
+                          g_vmin < VBAT_CRITICAL_V
+                              ? "TRIPPED. four-motor flight is not possible "
+                                "on this pack."
+                              : "held. the pack survives four motors here.");
+            return;
+        }
+
+        /* Linear ramp, then hold. */
+        const float frac = (el < ALL_RAMP_MS)
+            ? (float)el / (float)ALL_RAMP_MS : 1.0f;
+        const float duty = g_duty * frac;
+
+        MotorOutputs m{duty, duty, duty, duty};
+        motors_write(m);
+
+        const float v = d.battery->instant_volts();
+        if (v < g_vmin) { g_vmin = v; g_vmin_duty = duty; }
+
+        if (v < ALL_ABORT_V) {
+            stop_all();
+            g_mode = Mode::Off;
+            Serial.printf("\n    ABORTED at %.0f%% — pack fell to %.2f V "
+                          "(floor %.2f V)\n", duty * 100.0f, v, ALL_ABORT_V);
+            Serial.println("    that IS the result: this pack cannot carry "
+                           "four motors this far.\n");
+            return;
+        }
+
+        if (now_ms - g_last_print >= 200) {
+            g_last_print = now_ms;
+            Serial.printf("    ALLMOTOR vbat slow %.2f  fast %.2f  duty %.0f%% "
+                          "each\n", d.battery->volts(), v, duty * 100.0f);
+        }
         break;
     }
 
@@ -274,6 +377,17 @@ void bench_update(uint32_t now_ms, const BenchDeps &d)
         Serial.println("\n--- sensor report ---");
         Serial.printf("  IMU        %s   who_am_i 0x%02X\n",
                       s.valid ? "OK" : "FAILED", d.imu->who_am_i());
+        /* Bus health. Read this WITH A MOTOR SPINNING (press A, then s) —
+         * idle numbers are always clean and tell you nothing. */
+        {
+            const uint32_t r = d.imu->reads();
+            const uint32_t f = d.imu->read_failures();
+            Serial.printf("  I2C        %lu reads, %lu failed (%.2f%%), "
+                          "worst run %lu\n",
+                          (unsigned long)r, (unsigned long)f,
+                          r ? (100.0f * (float)f / (float)r) : 0.0f,
+                          (unsigned long)d.imu->worst_consecutive_failures());
+        }
         if (s.valid) {
             const float g = sqrtf(s.ax * s.ax + s.ay * s.ay + s.az * s.az);
             Serial.printf("  gravity    %.2f g  %s\n", g,

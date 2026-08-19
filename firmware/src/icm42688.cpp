@@ -65,19 +65,38 @@ bool Icm42688::write_reg(uint8_t reg, uint8_t val)
     return Wire.endTransmission() == 0;
 }
 
+/* One place to book a failed transaction, so the two exit paths above cannot
+ * drift apart. */
+bool Icm42688::fail_read()
+{
+    read_failures_++;
+    consec_fail_++;
+    if (consec_fail_ > worst_consec_) worst_consec_ = consec_fail_;
+    return false;
+}
+
 bool Icm42688::read_regs(uint8_t reg, uint8_t *buf, uint8_t len)
 {
+    reads_++;
     Wire.beginTransmission(I2C_ADDR_IMU);
     Wire.write(reg);
-    if (Wire.endTransmission(false) != 0) return false;   /* repeated start */
-    if (Wire.requestFrom((int)I2C_ADDR_IMU, (int)len) != len) return false;
+    if (Wire.endTransmission(false) != 0) return fail_read();  /* rep. start */
+    if (Wire.requestFrom((int)I2C_ADDR_IMU, (int)len) != len) return fail_read();
     for (uint8_t i = 0; i < len; i++) buf[i] = Wire.read();
+    consec_fail_ = 0;
     return true;
 }
 
 bool Icm42688::begin()
 {
     Wire.begin(PIN_SDA, PIN_SCL, I2C_FREQ_HZ);
+    /* Bound a hung transaction. The arduino-esp32 default is 50ms, which at
+     * a 1kHz control loop is fifty missed cycles from ONE stuck read. 5ms,
+     * not 2: timeOutMillis is divided by portTICK_RATE_MS, so 2ms becomes 2
+     * FreeRTOS ticks and quantisation can expire it ~1ms after a boundary —
+     * against a ~400us nominal 14-byte burst at 400kHz. Too tight a timeout
+     * manufactures the failures it is meant to survive. */
+    Wire.setTimeOut(5);
 
     if (!write_reg(REG_BANK_SEL, 0)) { err_ = "bus dead"; return false; }
 

@@ -60,8 +60,28 @@ public:
     uint8_t who_am_i() const { return whoami_; }
     const char *last_error() const { return err_; }
 
+    /* --- bus health ------------------------------------------------------
+     * Added 2026-08-19. The bench logged 58 "[E][Wire.cpp:499] requestFrom()"
+     * lines in 135 lines of serial output while a motor was spinning, and
+     * zero with the motors idle — but that is a count of LOG LINES, not of
+     * transactions, so the actual failure RATE was unknown. Nothing in the
+     * firmware counted them. Without a rate there is no way to tell whether
+     * any fix helped.
+     *
+     * worst_consecutive_failures() matters more than the total: main.cpp
+     * clears g_imu_bad_s on ANY successful read, so an intermittent fault
+     * interleaved with successes — exactly the observed pattern — never
+     * accumulates toward IMU_LOSS_TIMEOUT_S no matter how bad it gets. The
+     * consecutive count is the number that would actually catch it. */
+    uint32_t reads() const { return reads_; }
+    uint32_t read_failures() const { return read_failures_; }
+    uint32_t worst_consecutive_failures() const { return worst_consec_; }
+    void reset_bus_stats() { reads_ = read_failures_ = 0;
+                             consec_fail_ = worst_consec_ = 0; }
+
 private:
     bool write_reg(uint8_t reg, uint8_t val);
+    bool fail_read();
     bool read_regs(uint8_t reg, uint8_t *buf, uint8_t len);
 
     float gyro_scale_;   /* LSB -> deg/s */
@@ -70,6 +90,13 @@ private:
     bool  calibrated_;
     uint8_t whoami_;
     const char *err_;
+
+    /* Default-initialised here rather than in the constructors: there are two
+     * (target and host) and neither should have to remember these. */
+    uint32_t reads_ = 0;
+    uint32_t read_failures_ = 0;
+    uint32_t consec_fail_ = 0;
+    uint32_t worst_consec_ = 0;
 };
 
 #endif /* PURSUIT_ICM42688_H */
