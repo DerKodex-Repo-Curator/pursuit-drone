@@ -6,8 +6,17 @@
 PY      ?= vision/.venv/bin/python
 PIO     ?= pio
 
+# The board toolchain needs TWO interpreters and mixing them up wastes an hour:
+#   KPY  KiCad's bundled 3.9 — anything that imports pcbnew
+#   SPY  a system 3.12+      — gen_sch.py and the pure-python gates (f-strings
+#                              KiCad's 3.9 cannot parse)
+KPY     ?= /Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/3.9/bin/python3
+SPY     ?= /opt/homebrew/Cellar/platformio/6.1.19_2/libexec/bin/python3
+CLI     ?= /Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli
+HWDIR   ?= $(HOME)/hw/scripts
+
 .PHONY: help all test vision sim firmware target e2e sweep verify quant \
-        protocol hygiene docker demo clean
+        protocol hygiene docker demo clean board board-gates
 
 help:
 	@echo "make            everything that needs no hardware and no weights"
@@ -23,10 +32,65 @@ help:
 	@echo "make hygiene    no secrets, no biometrics, no blobs tracked"
 	@echo "make docker     build and run the reproducible container"
 	@echo "make demo       run the pipeline on the webcam (needs weights)"
+	@echo ""
+	@echo "make board      regenerate the PCB and run EVERY order gate"
+	@echo "make board-gates  the gates only, without regenerating"
 
 all: hygiene protocol vision sim firmware target
 	@echo ""
 	@echo "================= ALL GREEN ================="
+
+# ---------------------------------------------------------------- board ---
+# One command, in the one order that works. Encoded here because every step
+# of it has been got wrong at least once:
+#
+#   * the two interpreters (see KPY/SPY above)
+#   * zone fill MUST happen out of process — the in-process ZONE_FILLER
+#     segfaults headless, so gen_pcb.py deliberately saves with zones unfilled
+#     and `kicad-cli pcb drc --refill-zones --save-board` is what fills them
+#   * NEVER PIPE A GATE. `kicad-cli ... --exit-code-violations | tail -3`
+#     reports TAIL's exit code, not kicad-cli's. A run that returned 5 with
+#     199 violations was once read as clean through exactly that mistake.
+#     Every gate below writes to a file and is read afterwards.
+#   * gerbers/BOM.csv is hand-maintained, so it has no generator to refresh
+#     its mtime; preflight fails any file in gerbers/ older than the board.
+DRC_OUT := /tmp/pursuit_drc.json
+ERC_OUT := /tmp/pursuit_erc.json
+
+board:
+	@echo "--- 1/9  footprints (hole pitch asserted) ---"
+	$(SPY) scripts/footprints.py
+	@echo "--- 2/9  netlist audit ---"
+	$(SPY) scripts/design.py
+	@echo "--- 3/9  placement + edge + back-side gates ---"
+	$(SPY) scripts/check_place.py
+	@echo "--- 4/9  schematic ---"
+	$(SPY) scripts/gen_sch.py
+	@echo "--- 5/9  board ---"
+	$(KPY) scripts/gen_pcb.py > /dev/null
+	@$(MAKE) --no-print-directory board-gates
+
+board-gates:
+	@echo "--- 6/9  ERC (unpiped, exit code honoured) ---"
+	@$(CLI) sch erc --severity-error --severity-warning \
+	    --exit-code-violations -o $(ERC_OUT) --format json \
+	    hardware/pursuit.kicad_sch > /tmp/pursuit_erc.txt 2>&1; \
+	  rc=$$?; grep -i '^found' /tmp/pursuit_erc.txt; exit $$rc
+	@echo "--- 7/9  DRC, zones refilled out of process, board saved ---"
+	@$(CLI) pcb drc --severity-all --exit-code-violations \
+	    --refill-zones --save-board -o $(DRC_OUT) --format json \
+	    hardware/pursuit.kicad_pcb > /tmp/pursuit_drc.txt 2>&1; \
+	  rc=$$?; grep -i '^found' /tmp/pursuit_drc.txt; exit $$rc
+	@echo "--- 8/9  netlist parity, pour islands, plane continuity ---"
+	$(SPY) scripts/check_sch.py
+	$(KPY) scripts/audit_islands.py
+	$(SPY) $(HWDIR)/check_ground.py hardware/pursuit.kicad_pcb --net GND
+	$(SPY) $(HWDIR)/check_ground.py hardware/pursuit.kicad_pcb --net VBAT
+	@echo "--- 9/9  release package + order gate ---"
+	$(KPY) scripts/release.py
+	$(KPY) scripts/gen_jlcpcb.py > /dev/null
+	@touch gerbers/BOM.csv
+	$(KPY) scripts/preflight.py
 
 test: all
 

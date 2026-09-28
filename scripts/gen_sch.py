@@ -391,6 +391,8 @@ def build():
     FET = lambda: load_lib_symbol("Transistor_FET", "Q_NMOS_GSD")
     CN2 = lambda: load_lib_symbol("Connector_Generic", "Conn_01x02")
     CN7 = lambda: load_lib_symbol("Connector_Generic", "Conn_01x07")
+    CN4 = lambda: load_lib_symbol("Connector_Generic", "Conn_01x04")
+    TP = lambda: load_lib_symbol("Connector", "TestPoint")
 
     # =================================================== MOTOR DRIVE x4 ===
     # One block per stage, identical geometry, so the four read as a set.
@@ -618,6 +620,25 @@ def build():
     sh.gnd((332, 248))
 
     # ============================================== BATTERY TELEMETRY ====
+    # ========================================================= TEST POINTS ===
+    # rev A had none. Every rail measurement during bring-up therefore had to
+    # be taken on a pad that was simultaneously a solder joint, and a probe on
+    # a marginal joint measures the probe, not the net. Two pads were lifted by
+    # the rework that followed. One dedicated pad per rail costs nothing and
+    # makes "is the rail alive?" a two-second question with the module seated.
+    sh.box(380, 364, 572, 410, "TEST POINTS  —  probe with module seated")
+    for ref, port, x in (("TP1", "vbat", 430.0),
+                         ("TP2", "v3",   480.0),
+                         ("TP3", "gnd",  530.0)):
+        sh.add(ref, TP(), x, 392, angle=0,
+               value=val_of(ref), footprint=fp_of(ref))
+        t = sh.pin(ref, 1)
+        sh.wire(t, (x, 396))
+        getattr(sh, port)((x, 396))
+    sh.text("Single pads, no part fitted. Meter reference for bring-up:",
+            390, 402, 1.3)
+    sh.text("TP3 is the only GND a probe should ever clip to.", 390, 407, 1.3)
+
     sh.box(15, 138, 185, 226, "BATTERY TELEMETRY  —  4.2V -> 2.1V")
     sh.add("R11", R(), 70, 164, angle=0, value=val_of("R11"), footprint=fp_of("R11"))
     sh.add("R12", R(), 70, 192, angle=0, value=val_of("R12"), footprint=fp_of("R12"))

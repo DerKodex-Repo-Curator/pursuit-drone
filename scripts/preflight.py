@@ -27,6 +27,9 @@ BOARD = os.path.join(HW, "pursuit.kicad_pcb")
 
 fails, warns = [], []
 
+# degrees JLCPCB's footprint sits round from KiCad's, by designator family
+CPL_FRAME_OFFSET = {"Q": 180.0}
+
 
 def bad(msg):
     fails.append(msg)
@@ -119,14 +122,21 @@ def main():
            abs(float(r["Mid Y"]) - oy) > 0.002:
             bad(f"CPL {ref}: position ({r['Mid X']},{r['Mid Y']}) != board "
                 f"({ox:.4f},{oy:.4f})")
-        if abs(float(r["Rotation"]) - orot) > 0.01:
-            bad(f"CPL {ref}: rotation {r['Rotation']} != board {orot}")
+        # The CPL is in JLCPCB's frame, not KiCad's. Stated here a SECOND time,
+        # by designator family and independently of gen_jlcpcb.JLC_ROTATION, so
+        # that dropping the correction from the generator fails this gate: the
+        # AO3400A (Q*) sits 180 deg round in JLCPCB's SOT-23 (2026-09-21, from
+        # JLCPCB's footprint for C20917 and from their placement preview).
+        want = (orot + CPL_FRAME_OFFSET.get(ref.rstrip("0123456789"), 0.0)) % 360
+        if abs((float(r["Rotation"]) - want + 180) % 360 - 180) > 0.01:
+            bad(f"CPL {ref}: rotation {r['Rotation']} != {want} "
+                f"(board {orot} + JLCPCB frame offset)")
     if cpl_refs != should:
         bad(f"CPL set mismatch: missing {sorted(should - cpl_refs)}, "
             f"extra {sorted(cpl_refs - should)}")
     else:
-        ok(f"CPL covers the same {len(should)} parts, positions and "
-           f"rotations match the board exactly")
+        ok(f"CPL covers the same {len(should)} parts, positions match the board "
+           f"exactly, rotations match it in JLCPCB's frame (Q* +180)")
 
     # CPL must sit in the same coordinate space as the gerbers. Parse ONLY
     # draw/move operations: a bare r"X(-?\d+)" also matches the format spec
@@ -172,8 +182,39 @@ def main():
     miss = need - names
     if miss:
         bad(f"zip missing layers: {sorted(miss)}")
+
     else:
         ok(f"zip has all {len(need)} required layers ({len(names)} files)")
+
+    # LAYER COUNT, derived on both sides and never listed.
+    #
+    # A hardcoded ten-filename checklist survives a 2 -> 4 layer change without
+    # a murmur: release.py would export only F.Cu and B.Cu, the fab would build
+    # a four-layer stackup with two BLANK inner layers, every gate here would
+    # pass, and the first symptom would be five dead boards. So the board, the
+    # gerber job file and the shipped zip all have to agree on one number, and
+    # the check is done against FileFunction rather than against filename
+    # extensions -- Protel names inner layers .g1/.g2 and KiCad names them
+    # differently, and that convention is not something to hardcode either.
+    n_board = pcbnew.LoadBoard(BOARD).GetCopperLayerCount()
+    job = os.path.join(GB, "fab", "pursuit-job.gbrjob")
+    if not os.path.exists(job):
+        bad("no pursuit-job.gbrjob in gerbers/fab")
+    else:
+        jt = open(job).read()
+        m = re.search(r'"LayerNumber"\s*:\s*(\d+)', jt)
+        if not m:
+            bad("gbrjob has no GeneralSpecs.LayerNumber")
+        elif int(m.group(1)) != n_board:
+            bad(f"gbrjob says {m.group(1)} copper layers, board has {n_board}")
+        cu = re.findall(r'"FileFunction"\s*:\s*"Copper,L(\d+),', jt)
+        if len(cu) != n_board:
+            bad(f"gbrjob declares {len(cu)} copper files, board has "
+                f"{n_board} layers: {sorted(cu)}")
+        elif sorted(int(x) for x in cu) != list(range(1, n_board + 1)):
+            bad(f"gbrjob copper layers are not L1..L{n_board}: {sorted(cu)}")
+        else:
+            ok(f"{n_board} copper layers agree across board, gbrjob and zip")
 
     # No file in gerbers/ may predate the board. A stale pre-rework gerber set
     # and a stale PURSUIT-1_placement.csv (still carrying 470R for R13/R14)
@@ -194,7 +235,11 @@ def main():
 
     # The assembly drawings are what the builder solders from. A stale pair
     # survived the round-4 silk rework still showing the deleted "PIN1=+".
-    for n in ("assembly_top.svg", "assembly_bottom.svg"):
+    # The plane renders are staleness-checked too: inner copper appears in
+    # no other artefact, so a stale one is a picture of a board that no
+    # longer exists, shown to someone deciding whether to spend money.
+    for n in ("assembly_top.svg", "assembly_bottom.svg",
+              "plane_in1_gnd.svg", "plane_in2_vbat.svg"):
         p = os.path.join(ROOT, "docs", n)
         if not os.path.exists(p):
             bad(f"docs/{n} missing")
@@ -208,6 +253,12 @@ def main():
     csvs = {n for n in os.listdir(GB) if n.lower().endswith(".csv")}
     allowed = {"JLCPCB_BOM.csv", "JLCPCB_CPL.csv", "ORIENTATION_CHECK.csv",
                "BOM.csv"}
+    # board_probe_points.png left this list in rev B. It was a hand-annotated
+    # bring-up screenshot -- no generator produced it, so it could only ever
+    # go stale, and it duly did. Rev B puts TP1/TP2/TP3 on the board with
+    # VBAT / 3V3 / GND printed on the top silk beside them, which is the same
+    # information carried by the thing being probed. Recoverable from git if
+    # it is ever wanted back.
     if csvs - allowed:
         bad(f"unexpected csv in gerbers/ (upload hazard): {sorted(csvs - allowed)}")
     else:
@@ -246,11 +297,12 @@ def main():
         ok(f"all {len(polar)} polarised parts listed for visual confirmation")
 
     # ---- 7. hand-fitted polarised parts must be marked on their own face --
-    # JLCPCB's placement render covers the 31 machine-placed parts. C1 and J1
-    # are fitted by hand and sit directly across an unfused 1S LiPo, so their
-    # only defence is silkscreen — which must be on the FACE THE PART IS ON
-    # and on the PAD-1 SIDE of the part. A "PIN1=+" once sat on F.SilkS for a
-    # belly part, on the pad-2 side, i.e. wrong face and wrong terminal.
+    # JLCPCB's placement render covers the machine-placed parts. Anything
+    # fitted BY HAND that sits across an unfused 1S LiPo has silkscreen as its
+    # only defence — which must be on the FACE THE PART IS ON and on the PAD-1
+    # SIDE. A "PIN1=+" once sat on F.SilkS for a belly part, on the pad-2 side,
+    # i.e. wrong face and wrong terminal.
+    #
     print("\n[7] polarity silk on hand-fitted parts")
     for ref in ("C1", "J1"):
         fp = b.FindFootprintByReference(ref)

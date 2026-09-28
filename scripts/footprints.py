@@ -4,6 +4,7 @@ All dimensions come from FACTS (locked from datasheet research); the emitter
 refuses to run while any value is None.
 """
 import os
+import re
 
 FACTS = dict(
     # XIAO ESP32S3 — research-locked (Seeed official KiCad PCB: pads ±7.62mm)
@@ -47,9 +48,54 @@ def _text(kind, txt, x, y, layer="F.SilkS", size=1.0):
             f'    (effects (font (size {size} {size}) (thickness 0.15))))\n')
 
 
-def _tht_pad(num, x, y, size=1.8, drill=1.0, shape="circle"):
+def _tht_pad(num, x, y, size=1.8, drill=1.0, shape="circle", size_y=None,
+             offset=0.0):
+    """size_y lets a pad be OVAL: wide across the row, narrow along it.
+    offset moves the COPPER outward while the HOLE stays on the pin grid.
+
+    Rev B. The annulus on a 1.8mm pad over a 1.0mm drill is 0.40mm, which is
+    too thin for KiCad to grow a thermal spoke -- so every pour-connected
+    through-hole ended up solid, and solid pads sink so much heat into the
+    copper that they cold-joint. That failure appeared five separate times
+    during bring-up (motor pins twice, header row twice, the 3V3 socket), and
+    twice more as a lifted annular ring when a joint was reworked.
+
+    Growing the pad round is not available at 2.54mm pitch: a 2.8mm round pad
+    would touch its neighbour. Growing it ACROSS the row is free, because
+    nothing sits there. An oval pad therefore gets the annulus a spoke needs
+    without shrinking pad-to-pad clearance at all.
+
+    But growing it SYMMETRICALLY is not free either, and that was the first
+    attempt at this fix. Every signal on this board crosses the waist between
+    the two header rows, and those lanes were hand-derived to thread the gaps
+    between the rev A pads. Widening the pads by 1.2mm inward put eleven
+    tracks and four pad pairs into DRC violation at once -- the corridor
+    simply is not there to give away.
+
+    So the copper grows OUTWARD ONLY, via a drill offset. The hole stays
+    exactly on the module's pin grid; the pad shape slides outboard by
+    `offset` so that its inner edge lands where the rev A pad's inner edge
+    was, to the micron. Nothing inboard changes, so nothing needs re-routing.
+    Everything gained lands outside the module body, which is also the only
+    place a soldering iron can actually reach once the module is seated --
+    the XIAO body overhangs its own pin rows by 1.28mm on each side, so on
+    rev A the entire pad was underneath the module.
+    """
+    sy = size if size_y is None else size_y
+    if shape == "circle" and sy != size:
+        shape = "oval"
+    # In KiCad's model `(at ...)` is the pad ANCHOR, which for a through-hole
+    # pad is the HOLE, and the drill `(offset ...)` moves the COPPER SHAPE
+    # relative to it -- not the other way round. Writing it the intuitive way
+    # round put every hole 0.6mm off the module's pin grid while leaving the
+    # copper where it started: fourteen holes that no XIAO would seat in, and
+    # a motor footprint whose two pads closed to 0.14mm. DRC caught it as a
+    # pad-to-pad clearance error, which is a lucky way to find out. So: `at`
+    # is always the nominal grid position, and `offset` is the outward shift.
+    dr = (f"(drill {drill})" if not offset
+          else f"(drill {drill} (offset {offset:.3f} 0))")
     return (f'  (pad "{num}" thru_hole {shape} (at {x:.3f} {y:.3f}) '
-            f'(size {size} {size}) (drill {drill}) (layers "*.Cu" "*.Mask"))\n')
+            f'(size {size} {sy}) {dr} (layers "*.Cu" "*.Mask"))\n')
 
 
 def _smd_pad(num, x, y, w, h):
@@ -78,6 +124,25 @@ def xiao_carrier():
     s = HEADER.format(name="XIAO_ESP32S3_Carrier", attr="through_hole")
     s += _text("reference", "REF**", 0, -l / 2 - 2)
     s += _text("value", "XIAO-ESP32S3-Sense", 0, l / 2 + 2)
+    # Rev B: 1.8 x 2.3 OVAL on the same 1.0mm drill, and no lateral growth.
+    #
+    # The annulus across the row stays 0.40mm, because this board has no room
+    # to widen it in either direction. Inboard is the waist, where every
+    # signal crosses between the two rows; outboard, SCL, M2_PWM, LED_CTRL
+    # and VBAT_SENSE all run in the channel between the pad column and the
+    # arms. A 3.0mm pad -- 0.6mm of growth per side -- was tried and put
+    # sixteen tracks into DRC violation. Widening this footprint means
+    # re-routing the densest part of the board, which is a bigger change than
+    # the one it is trying to make.
+    #
+    # Growing ALONG the row is free, and it is also sufficient. The failure
+    # being fixed is the cold joint, whose cause was that a 0.40mm annulus is
+    # too thin for a 0.4mm thermal spoke to attach to -- so KiCad fell back to
+    # a solid pour connection, and a solid connection into 2200mm^2 of copper
+    # takes the heat out of the joint faster than an iron puts it in. At 2.3mm
+    # along the row the annulus there is 0.65mm, a spoke forms north and south
+    # of every hole, and the pad stops being a heatsink. Clearance to the
+    # neighbouring pad is 0.24mm at 2.54mm pitch.
     for i in range(7):                       # left row: D0..D6 = pads 1..7
         s += _tht_pad(i + 1, -row, y0 + i * pitch,
                       shape="rect" if i == 0 else "circle")
@@ -144,10 +209,37 @@ def motor_pads():
     s = HEADER.format(name="Motor_Pads_2x", attr="through_hole")
     s += _text("reference", "REF**", 0, -2.6)
     s += _text("value", "8520", 0, 2.6, layer="F.Fab")
-    s += _tht_pad(1, -1.27, 0, size=2.0, drill=1.0, shape="rect")
-    s += _tht_pad(2, 1.27, 0, size=2.0, drill=1.0)
+    # Rev B: 2.4 x 2.0 oval on a 1.0mm drill, offset 0.30mm outboard. Grown
+    # symmetrically these two pads closed to 0.14mm of each other at 2.54mm
+    # pitch -- half the 0.2mm rule, and a solder bridge between motor + and
+    # motor - is a dead FET. Offset outboard the gap OPENS to 0.74mm (rev A:
+    # 0.54) while the outboard annulus goes 0.50 -> 1.00mm. Still solid-
+    # connected: these carry ~2.5A each. The wider ring is there so the pad
+    # survives a motor swap, which is the one repair this board will need
+    # over and over.
+    s += _tht_pad(1, -1.27, 0, size=2.4, size_y=2.0, drill=1.0,
+                  offset=-0.30, shape="rect")
+    s += _tht_pad(2, 1.27, 0, size=2.4, size_y=2.0, drill=1.0, offset=0.30)
     s += _text("user", "+", -1.27, -1.9, size=0.9)
     s += _text("user", "-", 1.27, -1.9, size=0.9)
+    s += ")\n"
+    return s
+
+
+def test_point():
+    """A single 2.0mm THT pad for a meter probe or a scope clip.
+
+    Rev B, and the cheapest change on the board. Bring-up spent days probing
+    pads that were never meant to be probed -- header sockets with a module
+    seated in them, and pads that had already been reworked -- because there
+    was nowhere else to reach VBAT, 3V3 or GND. Two of those pads eventually
+    lifted. Three dedicated pads make every power rail measurable without
+    touching anything that matters.
+    """
+    s = HEADER.format(name="TestPoint_1mm", attr="through_hole")
+    s += _text("reference", "REF**", 0, -2.2)
+    s += _text("value", "TP", 0, 2.2, layer="F.Fab")
+    s += _tht_pad(1, 0, 0, size=2.0, drill=0.9)
     s += ")\n"
     return s
 
@@ -157,6 +249,13 @@ def wire_pads():
     s = HEADER.format(name="Wire_Pads_2x", attr="through_hole")
     s += _text("reference", "REF**", 0, -2.4)
     s += _text("value", "BAT", 0, 2.4, layer="F.Fab")
+    # Rev B: 2.2 x 3.2 oval on the same 1.2mm drill. This footprint is the
+    # most boxed-in on the board: SDA and SCL thread the 2.2mm gap BETWEEN
+    # its two pads, and the +3V3 corridor and C6 run immediately outboard of
+    # them, so it cannot grow a micron in x -- 0.5mm per side put twelve
+    # tracks into violation. Perpendicular to the pair it is clear for 1.5mm
+    # in both directions, so that is where the copper goes: 0.70mm annulus
+    # there, enough for a thermal spoke, which is the whole point.
     s += _tht_pad(1, -2.2, 0, size=2.2, drill=1.2, shape="rect")
     s += _tht_pad(2, 2.2, 0, size=2.2, drill=1.2)
     # Polarity marker: swapping these two wires puts -3.7V on the XIAO's
@@ -172,8 +271,15 @@ def wire_pads_hd():
     s = HEADER.format(name="Wire_Pads_2x_HD", attr="through_hole")
     s += _text("reference", "REF**", 0, -3.0)
     s += _text("value", "PIGTAIL", 0, 3.0, layer="F.Fab")
-    s += _tht_pad(1, -2.2, 0, size=2.8, drill=1.5, shape="rect")
-    s += _tht_pad(2, 2.2, 0, size=2.8, drill=1.5)
+    # Rev B: 3.9 x 3.3 oval on a 1.5mm drill, offset 0.6mm outboard ->
+    # 1.80mm annulus outboard (was 0.65 all round), pad gap 0.50 -> 1.70mm.
+    # These stay
+    # SOLID-connected because they carry the full pack current, so they will
+    # still need long dwell -- but a 1.2mm ring survives rework instead of
+    # lifting, which is how the rev A board lost this footprint entirely.
+    s += _tht_pad(1, -2.2, 0, size=3.9, size_y=3.3, drill=1.5,
+                  offset=-0.6, shape="rect")
+    s += _tht_pad(2, 2.2, 0, size=3.9, size_y=3.3, drill=1.5, offset=0.6)
     s += _text("user", "+", -2.2, 2.6, size=1.2)
     s += ")\n"
     return s
@@ -190,6 +296,45 @@ def bare_hole(name, drill):
     return s
 
 
+# Hole pitch is the one number that decides whether a part physically fits,
+# and it is the number a drill-offset typo silently destroys: the copper still
+# looks right in every render, and only a meter or a mating part finds out.
+# So it is asserted, per footprint, against the pitch of the thing that mates.
+HOLE_PITCH = {
+    "XIAO_ESP32S3_Carrier": (15.24, 2.54),   # row spacing, pin pitch
+    "Motor_Pads_2x": (2.54, None),
+    "Wire_Pads_2x": (4.40, None),
+    "Wire_Pads_2x_HD": (4.40, None),
+}
+
+
+def _check_holes(name, body):
+    """Assert every drilled hole sits on the grid the mating part expects.
+
+    `(at ...)` on a through-hole pad is the HOLE. If a drill offset is ever
+    written into `at` instead of into `(offset ...)`, the copper stays put and
+    the hole walks -- so this reads the holes back out of the generated text
+    and checks the pitches directly, rather than trusting the caller.
+    """
+    want = HOLE_PITCH.get(name)
+    if not want:
+        return
+    holes = [(float(m.group(1)), float(m.group(2))) for m in
+             re.finditer(r'\(pad "[^"]+" thru_hole \S+ \(at '
+                         r'(-?\d+\.?\d*) (-?\d+\.?\d*)\)', body)]
+    assert holes, f"{name}: no through-hole pads found to check"
+    xs = sorted({round(x, 3) for x, _ in holes})
+    ys = sorted({round(y, 3) for _, y in holes})
+    across, along = want
+    got = round(max(xs) - min(xs), 3)
+    assert abs(got - across) < 1e-6, \
+        f"{name}: hole spacing across the rows is {got}, expected {across}"
+    if along is not None:
+        gaps = {round(b - a, 3) for a, b in zip(ys, ys[1:])}
+        assert gaps == {along}, \
+            f"{name}: hole pitch along the row is {sorted(gaps)}, expected {along}"
+
+
 def emit(outdir):
     missing = [k for k, v in FACTS.items() if v is None]
     assert not missing, f"FACTS pending research: {missing}"
@@ -198,11 +343,14 @@ def emit(outdir):
                      ("ICM42688P_LGA14", imu_lga14),
                      ("Motor_Pads_2x", motor_pads),
                      ("Wire_Pads_2x", wire_pads),
+                     ("TestPoint_1mm", test_point),
                      ("Wire_Pads_2x_HD", wire_pads_hd),
                      ("Strap_Hole_3.2", lambda: bare_hole("Strap_Hole_3.2", 3.2)),
                      ("Screw_Hole_2.2", lambda: bare_hole("Screw_Hole_2.2", 2.2))]:
+        body = fn()
+        _check_holes(name, body)
         with open(os.path.join(outdir, f"{name}.kicad_mod"), "w") as f:
-            f.write(fn())
+            f.write(body)
         print("wrote", name)
 
 

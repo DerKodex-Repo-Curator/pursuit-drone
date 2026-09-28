@@ -5,7 +5,7 @@
       "Application": "Pcbnew",
       "Version": "10.0.4"
     },
-    "CreationDate": "2026-08-05T15:06:02+01:00"
+    "CreationDate": "2026-09-21T01:20:37+01:00"
   },
   "GeneralSpecs": {
     "ProjectId": {
@@ -17,7 +17,7 @@
       "X": 92.0098,
       "Y": 92.0098
     },
-    "LayerNumber": 2,
+    "LayerNumber": 4,
     "BoardThickness": 1.6,
     "Finish": "None"
   },
@@ -30,6 +30,14 @@
       "MinLineWidth": 0.15,
       "TrackToRegion": 0.3,
       "RegionToRegion": 0.3
+    },
+    {
+      "Layers": "Inner",
+      "PadToPad": 0.1,
+      "PadToTrack": 0.1,
+      "TrackToTrack": 0.2,
+      "TrackToRegion": 0.3,
+      "RegionToRegion": 0.3
     }
   ],
   "FilesAttributes": [
@@ -39,8 +47,18 @@
       "FilePolarity": "Positive"
     },
     {
+      "Path": "pursuit-In1_Cu.g1",
+      "FileFunction": "Copper,L2,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "pursuit-In2_Cu.g2",
+      "FileFunction": "Copper,L3,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
       "Path": "pursuit-B_Cu.gbl",
-      "FileFunction": "Copper,L2,Bot",
+      "FileFunction": "Copper,L4,Bot",
       "FilePolarity": "Positive"
     },
     {
@@ -100,10 +118,34 @@
     },
     {
       "Type": "Dielectric",
-      "Thickness": 1.51,
+      "Thickness": 0.48,
       "Material": "FR4",
-      "Name": "F.Cu/B.Cu",
-      "Notes": "Type: dielectric layer 1 (from F.Cu to B.Cu)"
+      "Name": "F.Cu/In1.Cu",
+      "Notes": "Type: dielectric layer 1 (from F.Cu to In1.Cu)"
+    },
+    {
+      "Type": "Copper",
+      "Thickness": 0.035,
+      "Name": "In1.Cu"
+    },
+    {
+      "Type": "Dielectric",
+      "Thickness": 0.48,
+      "Material": "FR4",
+      "Name": "In1.Cu/In2.Cu",
+      "Notes": "Type: dielectric layer 2 (from In1.Cu to In2.Cu)"
+    },
+    {
+      "Type": "Copper",
+      "Thickness": 0.035,
+      "Name": "In2.Cu"
+    },
+    {
+      "Type": "Dielectric",
+      "Thickness": 0.48,
+      "Material": "FR4",
+      "Name": "In2.Cu/B.Cu",
+      "Notes": "Type: dielectric layer 3 (from In2.Cu to B.Cu)"
     },
     {
       "Type": "Copper",

@@ -2,14 +2,17 @@
 (pick-and-place), for TOP-SIDE SMD assembly only.
 
 Deliberately excludes:
-  - bottom-side SMD (C1, C10-C13) and all THT/wire parts, which the builder
-    hand-solders;
+  - bottom-side SMD (C1 ONLY since rev C -- C10-C13 moved to the top and ARE
+    machine-placed; see VERIFICATION.md s15) and all THT/wire parts, which the
+    builder hand-solders;
   - the XIAO module itself (it plugs into headers, it is not a placed part).
 
-Rotation: KiCad's footprint rotation is emitted as-is. JLCPCB's part-library
-orientation often differs, and a 180-degree error on a polarised part is
-fatal, so every polarised part is listed in the ORIENTATION CHECK sheet for
-manual verification against JLCPCB's assembly preview.
+Rotation: KiCad's footprint rotation PLUS a per-part correction into JLCPCB's
+frame (JLC_ROTATION below). JLCPCB rotates ITS OWN footprint for the LCSC code,
+and that footprint's zero is not always KiCad's. Until 2026-09-21 the rotation
+was emitted as-is "to be read off the preview"; read off the preview, all four
+AO3400A came out 180 degrees round. Every polarised part is still listed in
+the ORIENTATION CHECK sheet for verification against JLCPCB's assembly preview.
 """
 import csv
 import os
@@ -22,6 +25,21 @@ import pcbnew
 HW = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "hardware"))
 OUT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "gerbers"))
 OX, OY = 150.0, 100.0
+
+# Degrees to ADD to KiCad's rotation so the part lands the right way round in
+# JLCPCB's frame, keyed by LCSC code. Derived, not taken from a community table:
+# fit KiCad's footprint pads against JLCPCB's own footprint for that code
+# (easyeda.com/api/products/<LCSC>/components) BY PIN FUNCTION, not pad number,
+# because the two libraries do not number two-pin parts alike.
+#   C20917  AO3400A SOT-23  1=G 2=S 3=D in both; JLC's footprint fits KiCad's
+#           SOT-23 at 180 deg (0.06 mm), next best 270 deg at 1.95 mm. The same
+#           JLC footprint (uuid bade9066...) is why the RL car's Q1 carries +180.
+#           Confirmed on JLCPCB's own preview 2026-09-21: uncorrected, the pin-1
+#           dot sat OUTBOARD on Q1-Q4, where this board puts the single drain pin.
+#   C8678 SS34, C84256 red LED, C1850418 ICM-42688-P: fit at 0 deg, preview agrees.
+#   C84261 yellow LED: pads fit at 180 deg BY NUMBER, but JLC numbers the ANODE
+#           as pin 1 and KiCad the cathode, so by function it is 0. Preview agrees.
+JLC_ROTATION = {"C20917": 180.0}
 
 # LCSC part numbers. Only fill in codes that have been verified against a
 # live LCSC/JLCPCB listing — a wrong code silently fits the wrong part.
@@ -38,11 +56,36 @@ LCSC = {
     "R7": ("C21190", "1k 0603 1% 0603WAF1001T5E"),
     "R8": ("C21190", "1k 0603 1% 0603WAF1001T5E"),
     "R9": ("C23162", "4.7k"), "R10": ("C23162", "4.7k"),
-    "R11": ("C25803", "100k"), "R12": ("C25803", "100k"),
+    # Rev B: 10k, was 100k -- see design.py for why (50kOhm source into the
+    # S3 ADC produced a fake, perfectly linear "battery sag"). Verified
+    # 2026-08-21 against the JLCPCB catalogue: C25804 = 0603WAF1002T5E,
+    # UNI-ROYAL, 10k +-1% 0603, Basic. Same series as every other resistor
+    # here (C21190 = ...1001T5E 1k, C22808 = ...1500T5E 150R), which is the
+    # cross-check that matters -- the part number differs from the 100k it
+    # replaces (C25803) by one digit, and one digit is the whole error.
+    # Snapshot showed 0 stock, which for the most common resistor value in
+    # existence reads as a stale snapshot; re-check stock at order time.
+    # STOCK: LIVE-VERIFIED 2026-08-30 -- LCSC shows 1,136,900 in stock at
+    # $0.0025/ea. The snapshot's ZERO was stale, as suspected. The cart is
+    # still the final word at order time, but this is no longer a blocker.
+    #
+    # If it really is out: C2906982 (FRC0603F1002TS) is a drop-in. Verified
+    # identical spec against the same catalogue -- 100mW, 10kOhm, 75V, thick
+    # film, +-1%, +-100ppm/C, 0603 -- with 10.3M in stock. It is EXTENDED, so
+    # it costs one $3 setup fee, and it is the only line on this BOM that
+    # would move. Do NOT substitute C23192: it looks adjacent by part number
+    # and is 510k, which would put 4.2V straight onto the ADC pin.
+    "R11": ("C25804", "10k 0603 1% 0603WAF1002T5E"),
+    "R12": ("C25804", "10k 0603 1% 0603WAF1002T5E"),
     "U2": ("C1850418", "ICM-42688-P"),
     "C2": ("C57112", "10nF 0603 X7R 50V"),
     "C3": ("C14663", "100nF 0603 X7R 50V"),
     "C8": ("C14663", "100nF 0603 X7R 50V"),
+    # rev C: C10-C13 moved from the BELLY to the top face, so they are
+    # machine-placed now and need a code. Same verified 100nF 0603 X7R
+    # as C3 and C8 -- design.py asks for 16V, this is the 50V part, which
+    # is the same footprint and strictly more margin on a 4.2V rail.
+    **{f"C{i}": ("C14663", "100nF 0603 X7R 50V") for i in (10, 11, 12, 13)},
     "C4": ("C23630", "2.2uF 0603 X5R 16V"),
     "C6": ("C45783", "22uF 0805 X5R 25V"),
     "C7": ("C15008", "100uF 1206 X5R 6.3V"),
@@ -95,8 +138,9 @@ def main():
         x = pcbnew.ToMM(pos.x)
         y = -pcbnew.ToMM(pos.y)
         rot = fp.GetOrientationDegrees() % 360
+        jlc_rot = (rot + JLC_ROTATION.get(code, 0.0)) % 360
         bom_rows.append([comp["value"], ref, comp["footprint"], code])
-        cpl_rows.append([ref, f"{x:.4f}", f"{y:.4f}", "Top", f"{rot:.2f}"])
+        cpl_rows.append([ref, f"{x:.4f}", f"{y:.4f}", "Top", f"{jlc_rot:.2f}"])
         # Match the polarity rule on the DESIGNATOR FAMILY, never on the
         # LCSC key — adding an explicit per-part code once changed `key`
         # from "LED" to "LED1" and both LEDs silently vanished from the

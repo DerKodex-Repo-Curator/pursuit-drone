@@ -141,9 +141,19 @@ def add_routes(board, nets, placed, P, FromMM, FAB):
     # top corridor from J2.2 (THT) east to the capacitor chain
     T("+3V3", F, "sig_w", [pad("J2", 2), (-4.5, 5.7), (3.5, 5.7),
                            (4.45, 4.9), pad("C6", 1)])
+    # ---- J2, the I2C expansion connector, out on the west plate ----------
+    # Four short runs. SDA and SCL come straight off U1's left pin row 6-7mm
+    # away; +3V3 taps the B.Cu trunk it already runs beside; ground goes down
+    # a via to the plane like every other top-side part.
     T("+3V3", F, "sig_w", [pad("C6", 1), (4.03, 5.2), (4.03, 8.0),
                            (5.35, 8.8), (5.35, 10.7), pad("C3", 1)])
     T("+3V3", F, "sig_w", [pad("C3", 1), (5.2, 12.2), pad("C7", 1)])
+    # TP2 stub. GND and VBAT both have a pour and pick their test point up for
+    # free; 3V3 has neither, so it needs 4mm of copper to reach the north
+    # plate. Worth it: 3V3 is the rail that was actually in doubt during
+    # bring-up, and the only way to read it then was to back-probe a header
+    # socket with the module sitting in it.
+    T("+3V3", F, "sig_w", [pad("C7", 1), pad("TP2", 1)])
     T("+3V3", F, "sig_w", [pad("C3", 1), (2.6, 11.7), (1.16, 11.4),
                            pad("U2", 8)])
     # AP_CS ties to VDDIO (pin 5) through the package centre — 0.15mm
@@ -179,6 +189,23 @@ def add_routes(board, nets, placed, P, FromMM, FAB):
         ("U2", 9, [(2.4, 10.45)], (3.6, 10.4)),     # shares C3's via
         ("LED1", 1, [AP(2, 31.9, 1.9)], AP(2, 31.9, 1.9)),
         ("LED2", 1, [], (5.4, 18.6)),
+
+        # rev C arm bypass caps, now top-side: their GROUND pad is stranded in
+        # the F.Cu VBAT pour and needs its own via down. Perp 4.6 -- outboard
+        # of the cap at 3.4, clear of the flyback via cluster at 1.9, and in
+        # the part of the 12mm arm that carries nothing.
+        # Arm 2 is the exception, as it is for almost everything on this
+        # board. MEASURED, not assumed: LED1_A runs the length of arm 2 at
+        # perp 5.00 (the module docstring's "lane +3.9" is where it enters,
+        # not where it runs). So the usable band at r=29 is 2.5..4.6 -- above
+        # the flyback's VBAT vias at 1.9, below LED1_A at 5.0. A via at 5.1
+        # sat directly ON the lane; 4.2 clears it by 0.25mm.
+        # Arm 2's via also steps OUT along the arm, to r=30.2. Pulling it in
+        # to perp 4.2 to clear LED1_A brought it within 0.15mm of the cap's
+        # own VBAT pad at r=28.22 -- the other pad, the one it must NOT touch.
+        # r=30.2 sits it beside pad 2 (r=29.78), which is its own net.
+        *[(f"C{i + 9}", 2, [], AP(i, 30.2, 4.2) if i == 2 else AP(i, 29.0, 4.6))
+          for i in (1, 2, 3, 4)],
     ]
     # ---- FET source: the motor return, same 2.75A as the drain ----------
     # This is the return leg of the motor loop and it is the ONLY path (Q is
@@ -216,9 +243,14 @@ def add_routes(board, nets, placed, P, FromMM, FAB):
         sx, sy = SIGN[i]
         ux, uy = sx * C45, sy * C45
         px, py = -uy, ux                     # arm perpendicular unit
-        bx, by = pad(f"C{i+9}", 1)
         vxy = AP(i, 29.0, 1.9)           # beside D's VBAT pad, clear of it
-        T("VBAT", B, "sig_w", [(bx, by), vxy])
+        # rev C: C10-C13 moved from the BELLY to the TOP face, so the B.Cu
+        # track that used to carry each cap's VBAT pad up to this via is gone
+        # -- the pad now sits directly ON the F.Cu VBAT pour. The via stays,
+        # because it serves D{i}'s cathode, not the capacitor. What the caps
+        # need instead is a route the other way: their GROUND pad is now
+        # stranded in the middle of a VBAT plane and vias down in the GND
+        # stitching table above.
         V("VBAT", *vxy)
         # Redundant vias at every flyback cathode. One via per motor was the
         # blocker on the FET source; the same single-point-of-failure then

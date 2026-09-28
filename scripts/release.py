@@ -27,8 +27,49 @@ SCH = os.path.join(HW, "pursuit.kicad_sch")
 # Protel extensions, absolute (page) coordinates, mask subtracted from silk.
 # The CPL is emitted in the same absolute page coordinates, so the two agree
 # only as long as no origin flag is added here.
-GERBER_LAYERS = ("F.Cu,B.Cu,F.Paste,B.Paste,F.Silkscreen,B.Silkscreen,"
-                 "F.Mask,B.Mask,Edge.Cuts")
+#
+# The copper layers are READ FROM THE BOARD, never listed here. A literal
+# "F.Cu,B.Cu" survives a 2 -> 4 layer change without complaining and simply
+# stops exporting the inner planes: the fab receives a four-layer stackup with
+# two blank inner layers, every gate still passes, and the first sign of
+# trouble is five dead boards. This is the same class of defect as the round-3
+# --subtract-soldermask incident that made this file exist.
+NON_COPPER = ("F.Paste", "B.Paste", "F.Silkscreen", "B.Silkscreen",
+              "F.Mask", "B.Mask", "Edge.Cuts")
+
+
+def copper_layers(board_path):
+    """Copper layer names, in stackup order, straight out of the board."""
+    import re
+    with open(board_path) as f:
+        raw = f.read()
+    m = re.search(r"\n\t\(layers\n(.*?)\n\t\)", raw, re.S)
+    assert m, "no (layers ...) block in the board -- format changed?"
+    found = re.findall(r'\(\s*(\d+)\s+"([^"]+)"\s+(signal|power|mixed|jumper)\b',
+                       m.group(1))
+    assert found, "no copper layers found in the board's (layers ...) block"
+    names = [t[1] for t in found]
+
+    # Sort by STACKUP position, not by KiCad's internal layer id. Those are not
+    # the same order: KiCad numbers F.Cu 0 and B.Cu 2, with In1/In2 ABOVE both,
+    # so sorting by id yields F, B, In1, In2 -- a physically meaningless
+    # sequence that would quietly become the order in the gerber job file.
+    def stack_pos(name):
+        if name == "F.Cu":
+            return -1
+        if name == "B.Cu":
+            return 10_000
+        m2 = re.fullmatch(r"In(\d+)\.Cu", name)
+        assert m2, f"unrecognised copper layer {name!r}"
+        return int(m2.group(1))
+
+    return sorted(names, key=stack_pos)
+
+
+def gerber_layer_arg(board_path):
+    cu = copper_layers(board_path)
+    print(f"  copper layers from board: {', '.join(cu)}")
+    return ",".join(cu + list(NON_COPPER))
 
 
 def run(*args):
@@ -42,7 +83,7 @@ def main():
     os.makedirs(FAB, exist_ok=True)
 
     run(CLI, "pcb", "export", "gerbers", "--output", FAB,
-        "--layers", GERBER_LAYERS, "--subtract-soldermask", BOARD)
+        "--layers", gerber_layer_arg(BOARD), "--subtract-soldermask", BOARD)
     run(CLI, "pcb", "export", "drill", "--output", FAB, "--format", "excellon",
         "--drill-origin", "absolute", "--generate-map",
         "--map-format", "gerberx2", BOARD)
@@ -66,6 +107,18 @@ def main():
         if side == "bottom":
             args.insert(-1, "--mirror")
         run(*args)
+
+    # Plane renders. Inner copper is invisible in every other artefact -- it
+    # does not appear in the 3D render, the assembly drawings or the silk, so
+    # a plane that fragmented or flooded a keepout would ship unseen. These
+    # are the only way a human ever looks at L2 and L3.
+    for lyr, name in (("In1.Cu", "plane_in1_gnd.svg"),
+                      ("In2.Cu", "plane_in2_vbat.svg")):
+        if lyr not in copper_layers(BOARD):
+            continue
+        run(CLI, "pcb", "export", "svg", "--output", os.path.join(DOCS, name),
+            "--layers", f"{lyr},Edge.Cuts", "--page-size-mode", "2",
+            "--exclude-drawing-sheet", BOARD)
 
     h = hashlib.sha256(open(BOARD, "rb").read()).hexdigest()[:16]
     mtime = datetime.fromtimestamp(os.path.getmtime(BOARD))

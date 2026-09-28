@@ -7,6 +7,7 @@ running this. Exit code 1 blocks the release.
 
 Run with KiCad's bundled python3.
 """
+import math
 import os
 import sys
 
@@ -29,19 +30,34 @@ def main():
         # Which of this net's pads/vias land inside each fill polygon? A
         # fragment holding a pad is a functional island: that pad's only
         # path to the rest of the net is whatever single via bridges it.
+        # A pad is attributed to the fragment that SURROUNDS it, not to the
+        # one containing its centre. Those differ the moment a pad is
+        # thermally relieved: the fill carries a keep-out ring around the pad,
+        # so the pad centre sits in a hole and PointInside says no -- for
+        # every relieved pad on the board. Before rev B almost every pour pad
+        # was solid and the distinction never showed; testing a ring of points
+        # just outside the relief gap works for both kinds.
         feats = []
         for fp in b.GetFootprints():
             for p in fp.Pads():
-                if p.GetNetname() == net and p.IsOnLayer(lyr):
-                    feats.append((f"{fp.GetReference()}.{p.GetNumber()}",
-                                  p.GetPosition()))
+                if p.GetNetname() != net or not p.IsOnLayer(lyr):
+                    continue
+                sz = p.GetSize()
+                r = max(sz.x, sz.y) / 2 + pcbnew.FromMM(0.35)
+                pos = p.GetPosition()
+                ring = [pcbnew.VECTOR2I(int(pos.x + r * math.cos(a)),
+                                        int(pos.y + r * math.sin(a)))
+                        for a in [i * math.pi / 6 for i in range(12)]]
+                feats.append((f"{fp.GetReference()}.{p.GetNumber()}",
+                              [pos] + ring))
         for t in b.GetTracks():
             if isinstance(t, pcbnew.PCB_VIA) and t.GetNetname() == net:
-                feats.append(("via", t.GetPosition()))
+                feats.append(("via", [t.GetPosition()]))
         held = []
         for k in range(n):
             o = polys.Outline(k)
-            inside = [nm for nm, pos in feats if o.PointInside(pos)]
+            inside = [nm for nm, pts in feats
+                      if any(o.PointInside(pt) for pt in pts)]
             held.append((o.Area() / 1e12, inside))
         # A fragment that holds a pad is only acceptable if it escapes
         # through MORE THAN ONE via — that is exactly what separated the

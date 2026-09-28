@@ -85,6 +85,15 @@ def _radial(i, r, perp=0.0):
 PLACE = {
     "U1":  (0.0, -8.0, 0, "F"),      # XIAO, USB/camera edge at -y (front)
     "J4":  (0.0, 4.2, 0, "F"),       # BAT wire pads just behind module
+    # Test points, rev B. North plate, in a row, 3.5mm apart. This is the
+    # only large area of the board that is NOT underneath the module: the
+    # XIAO body covers x +-8.9 and y -18.5..+2.5, so anything probed inside
+    # that rectangle has to be reached past a seated module -- which is what
+    # made bring-up measurements so unreliable in the first place. Ordered
+    # VBAT / 3V3 / GND west to east, matching the silkscreen legend.
+    "TP1": (2.8, 14.8, 0, "F"),      # VBAT
+    "TP2": (6.3, 14.8, 0, "F"),      # 3V3
+    "TP3": (9.8, 14.8, 0, "F"),      # GND
     "U2":  (0.0, 10.2, 0, "F"),      # IMU at centre, axes board-aligned
     "C2":  (-4.5, 10.4, 90, "F"),     # VDD bypass
     "C4":  (-6.8, 10.2, 90, "F"),    # VDD bulk
@@ -97,7 +106,12 @@ PLACE = {
     "R12": (19.0, -2.0, 90, "F"),    # divider bottom
     "C8":  (19.0, -9.5, 90, "F"),    # sense filter
     "J1":  (-3.2, 13.9, 0, "F"),     # JST battery, rear-centre, opening rear
-"J5":  (-18.6, -9.5, 90, "F"),   # pigtail pads, left edge
+"J5":  (-18.6, -8.5, 90, "F"),   # pigtail pads, left edge (rev B: +1.0y,
+                                 # its pads now reach 0.6mm further outboard)
+    # rev C bulk bank, six 100uF 1206 replacing the single belly polymer C1.
+    # Four sit at the arm roots where the FETs draw their current; two more
+    # flank the pack entry. Every site was solved against the live courtyard
+    # set and the real Edge.Cuts loop, so all six clear 2.5mm to any edge.
     "C1":  (-10.5, 15.8, 0, "B"),    # bulk cap, rear-left belly
     "J2":  (-7.4, 7.0, 270, "B"),    # ToF header row, belly; breakout lies
                                      # flat rearward (battery is belly-front)
@@ -118,7 +132,21 @@ PLACE = {
     # Belly placement puts the GND pad straight into the B.Cu pour with no
     # return routing, and the VBAT side is tied explicitly to D pad 1
     # rather than relying on pour continuity along the arm.
-    **{f"C{i+9}": _radial(i, 29.0, 3.4) + (_arm_rot(i), "B")
+    # rev C: BELLY -> TOP. Perp stays at 3.4.
+    #
+    # Economic PCBA is single-sided at ANY price, so every belly part pushes
+    # the whole order up a tier -- about $58 of fixed fees, roughly ten times
+    # what the two extra copper layers cost. Moving these four is most of that
+    # saving, and it is free: on the top face their VBAT pad lands directly on
+    # the F.Cu VBAT pour, so the B.Cu track that used to lift it is gone.
+    #
+    # Perp 2.7 was tried, to also clear JLCPCB's 2.5mm component-to-edge rule.
+    # It does not fit. At 2.7 the cap's GROUND pad closes to 0.8mm centre-to-
+    # centre with the flyback's VBAT via cluster at perp 1.9 -- which is zero
+    # copper clearance, and DRC said so nine times. The arm is 12mm wide with a
+    # flyback down the middle; there is no perp that satisfies both. The edge
+    # rule loses, because it is a yield GUIDELINE and this is a short.
+    **{f"C{i+9}": _radial(i, 29.0, 3.4) + (_arm_rot(i), "F")
        for i in (1, 2, 3, 4)},
 }
 
@@ -250,11 +278,34 @@ def build():
         board.Add(ni)
         nets[name] = ni
 
+    # FOUR LAYERS, rev C. Bought as ROUTING FREEDOM, not as current capacity:
+    # JLCPCB's 4-layer stackup (JLC04161H-7628) puts 0.0152mm of copper on the
+    # inners, 43% of the outer weight, so the planes parallel the pack path but
+    # do not carry it. What they actually buy is somewhere for the belly
+    # capacitors' routing to go, which lets C1 and C10-C13 move to the top face
+    # and keeps the whole assembly run SINGLE-SIDED -- and Economic PCBA has no
+    # double-sided option at any price, so one belly part costs ~$58 in tier
+    # fees, roughly ten times what the two extra layers cost.
+    board.SetCopperLayerCount(COPPER_LAYERS)
+
     bds = board.GetDesignSettings()
+    bds.SetBoardThickness(FromMM(1.6))
     bds.m_CopperEdgeClearance = FromMM(FAB["edge_clearance"])
     bds.m_TrackMinWidth = FromMM(0.15)
     bds.m_ViasMinSize = FromMM(0.5)
     bds.m_MinThroughDrill = FromMM(0.3)
+    # Accept a single thermal spoke. KiCad's default demands two, and on the
+    # two pads that cannot get two -- U1.9 (module GND) and J4.1 (VBAT to the
+    # module) -- the neighbouring tracks block the other three directions, so
+    # the only way to satisfy the default is to go back to a solid pour tie,
+    # which is the exact defect this revision exists to remove. One 0.3mm
+    # spoke in 1oz copper carries ~0.9A for a 10C rise (IPC-2221 external);
+    # both pads serve the XIAO alone, whose worst case is a WiFi TX burst
+    # under 0.6A. The pack terminals (J1, J5) are forced solid in build() and
+    # are unaffected by this. The motor terminals are relieved as of
+    # 2026-09-21; each is fed by its own 1.2mm VBAT spine, so a pad that
+    # resolves only one spoke toward the pour is still fully supplied.
+    bds.m_MinResolvedSpokes = 1
 
     placed = {}
     for ref, comp in design.COMPONENTS.items():
@@ -276,12 +327,40 @@ def build():
         # Battery-current terminals stay solid-connected to the pour: these
         # carry up to ~10A and a 4-spoke relief would be the bottleneck.
         # Everything else keeps thermal relief so it can be hand-soldered.
-        # MT/J1/J5 carry battery current. U1 and J4 are here for a
-        # different and less happy reason: their annulus (1.8-2.2mm pad on a
-        # 1.0-1.2mm drill) is too narrow for a thermal spoke to form, so
-        # KiCad starves the relief. Solid is the only option that fabricates;
-        # budget extra iron dwell on those two.
-        if ref in ("MT1", "MT2", "MT3", "MT4", "J1", "J5", "U1", "J4"):
+        #
+        # Rev B: U1 has LEFT this list. In rev A it was here for a different
+        # and less happy reason -- a 1.8mm pad on a 1.0mm drill leaves a
+        # 0.40mm annulus, the thermal spoke was also 0.40mm, so no spoke could
+        # be placed and KiCad fell back to solid. That is the whole cold-joint
+        # story: three of the five bad joints found during bring-up were on
+        # this footprint (two header pins and the 3V3 socket), each presenting
+        # as a dead peripheral rather than as a bad joint. The spoke is 0.30mm
+        # now (see add_zone), so relief forms in the annulus that already
+        # exists and U1 solders like a normal pad. Its pins carry signals and
+        # the module's own supply, well under 1A.
+        #
+        # J4 STAYS. It was the obvious next candidate -- same argument, same
+        # kind of pad -- and it was tried. But J4.1 is the only place the F.Cu
+        # VBAT pour crosses the waist: relieve it and the pour splits into
+        # 2281mm^2 plus a stranded 91mm^2 pocket, which is what the island
+        # audit is there to catch. There is no room to route a deliberate
+        # bridge instead; the +3V3 corridor at y5.7 and the J2 pad row fence
+        # that gap completely. J4 was also not one of the five failures. So it
+        # keeps the solid tie, and the plane stays whole.
+        #
+        # 2026-09-21: MT1-MT4 have LEFT this list. They were kept solid on the
+        # argument that they "carry the pack". They do not: a motor terminal
+        # carries ONE motor, 2.75A at stall, and each already has its own
+        # 1.2mm B.Cu VBAT spine (routes.py) that passes that alone, so motor
+        # current never depended on the pour tie. What the solid tie did do is
+        # heat-sink the joint -- and two of the five cold joints on rev A were
+        # motor pins. Rev B answered with a wider annulus but left the tie;
+        # rev C then added In2 and tied the same four pads solidly into a
+        # SECOND plane (measured: ring copper 95% on F.Cu, 100% on In2), so the
+        # joints with the worst record got harder to solder, not easier. They
+        # now take the zone's 0.3mm relief like U1, on both layers. J1 and J5
+        # are the real pack terminals (J5 is the 10A pigtail) and stay solid.
+        if ref in ("J1", "J4", "J5"):
             for pad in fp.Pads():
                 pad.SetLocalZoneConnection(pcbnew.ZONE_CONNECTION_FULL)
         # Reference designators live on the Fab layer (assembly-drawing
@@ -312,6 +391,25 @@ def build():
     return board, nets, placed
 
 
+COPPER_LAYERS = 4
+
+
+def all_copper():
+    """Every copper layer, so a keepout cannot be written for only two.
+
+    This exists because `add_keepout`/`add_round_keepout` used to default to
+    (F_Cu, B_Cu). That default is silently wrong the moment inner layers are
+    added: the motor keepouts stop holding copper away from the metal motor
+    cans on In1 and In2, and a can then bridges the In2 VBAT plane to the In1
+    GND plane straight through the board. Nothing in DRC objects -- the planes
+    are legitimately there, the can is not in the design."""
+    order = (pcbnew.F_Cu, pcbnew.In1_Cu, pcbnew.In2_Cu, pcbnew.In3_Cu,
+             pcbnew.In4_Cu, pcbnew.B_Cu)
+    cu = [order[0]] + list(order[1:COPPER_LAYERS - 1]) + [pcbnew.B_Cu]
+    assert len(cu) == COPPER_LAYERS, f"{len(cu)} layers for a {COPPER_LAYERS}-layer board"
+    return tuple(cu)
+
+
 def add_zone(board, net, layer, margin=0.0):
     """Full-board rectangular zone; the fill clips to the outline."""
     z = pcbnew.ZONE(board)
@@ -330,7 +428,25 @@ def add_zone(board, net, layer, margin=0.0):
     # that DOES hold a pad must be caught rather than buried in noise.
     z.SetIslandRemovalMode(pcbnew.ISLAND_REMOVAL_MODE_ALWAYS)
     z.SetThermalReliefGap(FromMM(0.25))
-    z.SetThermalReliefSpokeWidth(FromMM(0.4))
+    # 0.4 -> 0.3. This one number is the whole cold-joint story. A thermal
+    # spoke has to fit inside the pad's annular ring, and on this board the
+    # ring is 0.40mm nearly everywhere (1.8mm pad, 1.0mm drill) -- exactly the
+    # old spoke width, so no spoke could be placed and KiCad silently fell
+    # back to a SOLID pour connection. A solid tie into 2200mm^2 of 1oz copper
+    # wicks heat out of the joint faster than a 60W iron puts it in, which is
+    # how five separate joints on the rev A board came out cold: two motor
+    # pins, two header pins and the 3V3 socket. Two 0.3mm spokes at 1oz carry
+    # ~1.5A, which is ample for every pad that keeps relief. Only the pack
+    # terminals (J1, J5) and J4 are still forced solid in build(); the four
+    # motor terminals joined the relieved set on 2026-09-21 (see build()).
+    #
+    # The alternative fix -- widen the pads until a 0.4mm spoke fits -- was
+    # tried first and does not work on this board. The XIAO carrier cannot
+    # grow in ANY direction: inboard is the waist where every signal crosses,
+    # outboard is the channel carrying SCL, M2_PWM, LED_CTRL and VBAT_SENSE,
+    # and the 0.74mm gaps BETWEEN pads in a column are themselves routing
+    # lanes. Each attempt put 12-16 tracks into violation for 0.25mm of ring.
+    z.SetThermalReliefSpokeWidth(FromMM(0.3))
     z.SetIsFilled(False)
     ext = MX + RING_OUT + 1
     pts = [(-ext, -ext), (ext, -ext), (ext, ext), (-ext, ext)]
@@ -365,9 +481,9 @@ def _rule_area(board, pts, name, layers, no_tracks):
 
 
 def add_keepout(board, x1, y1, x2, y2, name, layers=None, no_tracks=False):
-    """Rectangular no-copper rule area."""
+    """Rectangular no-copper rule area. Spans ALL copper unless told otherwise."""
     if layers is None:
-        layers = (pcbnew.F_Cu, pcbnew.B_Cu)
+        layers = all_copper()
     _rule_area(board, [(x1, y1), (x2, y1), (x2, y2), (x1, y2)],
                name, layers, no_tracks)
 
@@ -377,7 +493,7 @@ def add_round_keepout(board, cx, cy, r, name, layers=None, no_tracks=False):
     metal motor cans and the M2 camera-bracket hardware, either of which
     otherwise bridges VBAT (top) to GND (bottom) through the board."""
     if layers is None:
-        layers = (pcbnew.F_Cu, pcbnew.B_Cu)
+        layers = all_copper()
     n = 32
     pts = [(cx + r * math.cos(2 * math.pi * k / n),
             cy + r * math.sin(2 * math.pi * k / n)) for k in range(n)]
@@ -435,8 +551,32 @@ def add_silk(board):
              layer=pcbnew.B_SilkS, width=0.3)
 
     # ---- brand, on diagonally opposite arms (front-left / rear-right) -----
+    # Test point legend. Three bare pads in a row are useless without it --
+    # a probe on the wrong one of VBAT / 3V3 / GND during bring-up is how you
+    # get a reading you then spend a day explaining. The labels go on the far
+    # side of the row from the plate: the near side is C3 and C7, whose own
+    # silk and pads leave nothing free. On the top face, which is the side
+    # these are probed from.
+    # 0.9mm, not 1.1: at 1.1 the four letters of VBAT reach back over J1's
+    # silk outline. Still above JLCPCB's 0.8mm minimum legible height, and
+    # the stroke stays at the 0.15mm silk floor.
+    for label, tx in (("VBAT", 2.8), ("3V3", 6.3), ("GND", 9.8)):
+        text(label, tx, 16.9, size=0.9)
+
     arm_text("PURSUIT-1", 1, 30.0, -3.9, 1.5)
-    arm_text("Designed by Pai", 4, 30.0, 3.9, 1.0)
+    # Legends moved from perp +3.9 to -3.9. C10-C13 came up from the belly to
+    # perp +3.4 in rev C, and silk printed across a mask aperture ends up on
+    # the solder. -3.9 is where PURSUIT-1 has always sat on arm 1, so this is
+    # now consistent rather than merely clear.
+    arm_text("Designed by Pai", 4, 30.0, -3.9, 1.0)
+    # Revision mark. Rev A carried none, which was survivable while only one
+    # board existed. It stops being survivable the moment a rev B arrives on
+    # the bench beside it: the two are the same outline, the same placement
+    # and the same silk, and they differ in a pour setting, a resistor decade
+    # and three pads. Put the answer on the copper.
+    # Arm 3, not arm 2: arm 2 carries LED1 out at perp +2.8 and its silk
+    # outline reaches the +3.9 lane the other two legends use.
+    arm_text("REV C", 3, 30.0, -3.9, 1.2)
 
     # ---- motor IDs + rotation, belly, on each arm centreline -------------
     for i in (1, 2, 3, 4):
@@ -446,7 +586,10 @@ def add_silk(board):
 
     # ---- belly wordmark + safety -----------------------------------------
     text("PURSUIT-1", 2.5, 19.2, layer=pcbnew.B_SilkS, size=2.2)
-    text("BAT: CHECK POLARITY", 5.5, 16.2, layer=pcbnew.B_SilkS, size=1.2)
+    # 16.2 -> 17.1, into the 2.3mm gap between the rev B test point row
+    # (y 13.6..16.1) and the PURSUIT-1 wordmark (y 18.1..20.3). Silkscreen
+    # printed across a mask aperture ends up on the solder.
+    text("BAT: CHECK POLARITY", 5.5, 17.1, layer=pcbnew.B_SilkS, size=1.2)
     text("v1.0", 13.0, 19.3, layer=pcbnew.B_SilkS, size=1.0)
 
     # ---- polarity markings, each one BESIDE ITS OWN PART, ON ITS OWN FACE --
@@ -503,8 +646,15 @@ def fill_zones(board):
 
 def main():
     board, nets, placed = build()
+    # ADDITIVE, not moved. The outer pours stay exactly where rev B put them,
+    # so every hand-derived track in routes.py keeps its lane and its
+    # clearances -- moving the pours inward would have meant re-deriving the
+    # whole waist by hand. The inners are new, solid, and stitched to their
+    # outer counterparts, which is where the routing freedom comes from.
     add_zone(board, nets["VBAT"], pcbnew.F_Cu)
     add_zone(board, nets["GND"], pcbnew.B_Cu)
+    add_zone(board, nets["GND"], pcbnew.In1_Cu)     # L2: solid ground
+    add_zone(board, nets["VBAT"], pcbnew.In2_Cu)    # L3: solid pack rail
     # XIAO U.FL antenna corner (module rear-left) — keep copper clear
     add_keepout(board, -9.5, -2.5, -0.5, 3.0, "xiao-antenna")
     # Metal motor cans and M2 camera hardware span the full board thickness

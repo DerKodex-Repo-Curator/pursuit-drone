@@ -56,6 +56,14 @@ def parse_nets(text):
 
 def main():
     want = {}
+    pending = [r for r, c in design.COMPONENTS.items()
+               if c["pins"] == design.PENDING]
+    if pending:
+        # Without this the loop below does .items() on a string and dies with
+        # an AttributeError, which reads like a broken tool rather than a
+        # failed gate -- and a gate that looks broken gets skipped.
+        print(f"  FAIL  pins still PENDING: {sorted(pending)}")
+        sys.exit(1)
     for ref, c in design.COMPONENTS.items():
         for pin, net in c["pins"].items():
             if net:

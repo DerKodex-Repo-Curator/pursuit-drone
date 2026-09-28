@@ -1,7 +1,7 @@
 PURSUIT-1 fabrication package
-board sha256[:16] : 6b86f2c7b846d719
-board mtime       : 2026-08-05 08:16:43.842832
-exported          : 2026-08-05 15:06:15.162838
+board sha256[:16] : 063ea4f53800d7c1
+board mtime       : 2026-09-21 01:20:36.492654
+exported          : 2026-09-21 01:20:51.424213
 export flags      : --subtract-soldermask, absolute drill origin
 If the board hash above does not match hardware/pursuit.kicad_pcb,
 THIS PACKAGE IS STALE - regenerate before ordering.

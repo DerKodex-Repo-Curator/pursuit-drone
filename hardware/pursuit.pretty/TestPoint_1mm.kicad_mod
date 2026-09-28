@@ -1,0 +1,11 @@
+(footprint "TestPoint_1mm"
+  (version 20240108)
+  (generator "pursuit")
+  (layer "F.Cu")
+  (attr through_hole)
+  (fp_text reference "REF**" (at 0 -2.2) (layer "F.SilkS")
+    (effects (font (size 1.0 1.0) (thickness 0.15))))
+  (fp_text value "TP" (at 0 2.2) (layer "F.Fab")
+    (effects (font (size 1.0 1.0) (thickness 0.15))))
+  (pad "1" thru_hole circle (at 0.000 0.000) (size 2.0 2.0) (drill 0.9) (layers "*.Cu" "*.Mask"))
+)

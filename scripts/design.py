@@ -6,6 +6,7 @@ netlist audit all read THIS file. A connection that isn't here doesn't exist.
 Pin-number facts marked RESEARCH are locked from datasheet research before
 generation; generators refuse to run while any PENDING marker remains.
 """
+import sys
 
 PENDING = "PENDING-RESEARCH"
 
@@ -55,7 +56,31 @@ COMPONENTS = {
             "14": None,          # D7  / GPIO44 U0RXD — spare
         },
     ),
-    # Solder-jumper pads to the XIAO's underside battery pads (2 short wires)
+    # Solder-jumper pads to the XIAO's underside battery pads (2 short wires).
+    #
+    # ASKED AND ANSWERED 2026-08-22: could these four hand joints be deleted by
+    # feeding board VBAT into U1 pin 8 instead -- the module's 5V pin, which is
+    # already on the header and unconnected (see U1 "8" above)? NO.
+    #
+    # Read out of Seeed's own block diagram (XIAO ESP32S3 v1.4 schematic, sheet
+    # 3/4), not from a forum post:
+    #
+    #     USB -> VBUS/5V --+-> BAT charger -> BAT 3.7V -> [MOSFET] --+
+    #                      |                                         +-> DCDC 3V3
+    #                      +------------------[DIODE]----------------+
+    #
+    # VBUS reaches the 3V3 regulator through a DIODE. BAT reaches it through a
+    # MOSFET. J4 feeds BAT, so it pays ~0.05V; the 5V pin would pay ~0.35V.
+    #
+    # This rail already drops out around 3.4V AT THE REGULATOR, which is a pack
+    # at ~3.45V today. Through the 5V pin that becomes ~3.75V -- roughly 0.3V of
+    # usable pack surrendered, on the one rail whose sag already forces a
+    # throttle limiter in firmware. Four solder joints are not worth that.
+    #
+    # The reversal hazard these two wires carry is real and stays real. The fix
+    # for it is a KEYED connector at J4, not deletion (see also the J4 entry in
+    # docs/VERIFICATION.md section 14 -- deleting J4 outright leaves the module
+    # with no power path at all, because there is no regulator on this board).
     "J4": dict(
         value="XIAO-BAT-wires",
         lib=None, footprint="Wire_Pads_2x",
@@ -146,9 +171,15 @@ COMPONENTS = {
     "J1": dict(  # 1S LiPo in. Right-angle: crash forces load the shroud in
         # shear, not peel (research). JST-PH polarity is NOT standardized —
         # board carries CHECK POLARITY silk; verify pack with a meter first.
+        #
+        # REV C ATTEMPTED AND BACKED OUT: the surface-mount S2B-PH-SM4-TB, to
+        # turn two hand joints into zero. It does not fit. Its pads span
+        # 8.2 x 9.2mm against the through-hole part's 6.9 x 8.6mm, and its
+        # origin is the BODY CENTRE where the THT part's is PIN 1 -- so even
+        # re-anchored correctly it lands on U2 (the IMU) and hangs over the
+        # rear plate edge. There is nowhere else on the plate for it.
         value="JST-PH-2 BATT",
-        lib="Connector_JST",
-        footprint="JST_PH_S2B-PH-K_1x02_P2.00mm_Horizontal",
+        lib="Connector_JST", footprint="JST_PH_S2B-PH-K_1x02_P2.00mm_Horizontal",
         pins={"1": "VBAT", "2": "GND"},
     ),
     "J5": dict(  # direct-solder pigtail pads paralleling J1 (PH is the sag
@@ -157,12 +188,18 @@ COMPONENTS = {
         lib=None, footprint="Wire_Pads_2x_HD",
         pins={"1": "VBAT", "2": "GND"},
     ),
-    "C1": dict(  # bulk across the battery rail (brushed-motor sag).
-        # MUST be a polymer/tantalum with ESR <= 30mOhm: at 32kHz the
-        # reactance of 220uF is 23mOhm, so the part's ESR *is* its
-        # impedance. A plain aluminium can (150-600mOhm) would be a higher
-        # impedance than the pack itself and suppress nothing, while
-        # cooking on ~1A of ripple. Land pattern is 7343/D-case to match.
+    # REV C ATTEMPTED AND BACKED OUT: replacing this with six 100uF 1206
+    # ceramics. The reasons were good -- C1 is polarity-critical, hand-fitted,
+    # and sits across an unfused LiPo, so reversed it vents -- but the board
+    # will not take them. A scan against every track, via, pad, courtyard and
+    # the real board outline found exactly ONE site on the whole plate that
+    # clears all three constraints, and the arms have none: a 12mm arm with a
+    # 2.5mm component-to-edge rule leaves +-1.45mm of usable width and the
+    # flyback diode is already in it.
+    #
+    # So the swap is a ROUTING job, not a placement job, and it is queued as
+    # one. Until then C1 stays: belly, polarised, hand-fitted, silk-marked.
+    "C1": dict(
         value="220uF/6.3V polymer ESR<=30m",
         lib="Capacitor_Tantalum_SMD", footprint="CP_EIA-7343-31_Kemet-D",
         pins={"1": "VBAT", "2": "GND"},
@@ -171,19 +208,56 @@ COMPONENTS = {
     # current 0 -> 2.75A in tens of ns; C1 is 30-45mm away from three of
     # the four FETs and cannot supply those edges. Without these the rail
     # rings and the whole airframe radiates at 32kHz harmonics.
+    #
+    # Value string is "100nF", matching C3 and C8, because it IS the same part
+    # -- C14663, a 100nF 0603 X7R 50V. It used to read "100nF/16V X7R", which
+    # was a REQUIREMENT written into a field that the assembler reads as an
+    # INSTRUCTION. Harmless while these were hand-fitted; the moment rev C
+    # moved them to machine assembly, preflight refused the BOM for assigning
+    # one LCSC code two different values, which is exactly right. 50V on a
+    # 4.2V rail is margin, not a mismatch.
     **{
         f"C{i+9}": dict(
-            value="100nF/16V X7R", lib="Capacitor_SMD",
+            value="100nF", lib="Capacitor_SMD",
             footprint="C_0603_1608Metric",
             pins={"1": "VBAT", "2": "GND"},
         ) for i in (1, 2, 3, 4)
     },
-    "R11": dict(value="100k", lib="Resistor_SMD", footprint="R_0603_1608Metric",
+    # Rev B: 10k/10k, was 100k/100k.
+    #
+    # Two 100k resistors present a 50kOhm source to the ADC. Espressif want
+    # well under 10k for the ESP32-S3's sample-and-hold to settle, and at 50k
+    # it does not: measured 2026-08-20, the raw channel returned 1.70V at 0%
+    # motor duty and 0.00V mid-run while a multimeter read the pack at 3.64V.
+    # Worse, the glitch RATE scaled with PWM activity, so the filtered reading
+    # fell smoothly and linearly with throttle -- an almost perfect imitation
+    # of ohmic pack sag, r^2 essentially 1. Two days were spent diagnosing a
+    # high-impedance battery that did not exist.
+    #
+    # 10k/10k gives a 5kOhm source, inside spec with margin. The cost is idle
+    # draw: 4.2V/20k = 210uA against 21uA before. Over an hour that is 0.21mAh
+    # out of a 650mAh pack -- 0.03%, and the aircraft flies for four minutes.
+    # Trading 190uA for a battery reading you can believe is not a close call.
+    "R11": dict(value="10k", lib="Resistor_SMD", footprint="R_0603_1608Metric",
                 pins={"1": "VBAT", "2": "VBAT_SENSE"}),
-    "R12": dict(value="100k", lib="Resistor_SMD", footprint="R_0603_1608Metric",
+    "R12": dict(value="10k", lib="Resistor_SMD", footprint="R_0603_1608Metric",
                 pins={"1": "VBAT_SENSE", "2": "GND"}),
     "C8": dict(value="100nF", lib="Capacitor_SMD", footprint="C_0603_1608Metric",
                pins={"1": "VBAT_SENSE", "2": "GND"}),
+
+    # -- test points (rev B) -----------------------------------------------
+    # One pad per power rail, reachable with a meter probe while the module is
+    # seated and the aircraft is powered. Bring-up had none of these, so every
+    # measurement was taken on a pad that was also a joint -- and a probe on a
+    # marginal joint reads the probe, not the net. Two pads were eventually
+    # lifted by repeated rework at points that only existed because there was
+    # nowhere else to measure.
+    "TP1": dict(value="VBAT", lib=None, footprint="TestPoint_1mm",
+                pins={"1": "VBAT"}),
+    "TP2": dict(value="3V3", lib=None, footprint="TestPoint_1mm",
+                pins={"1": "+3V3"}),
+    "TP3": dict(value="GND", lib=None, footprint="TestPoint_1mm",
+                pins={"1": "GND"}),
 
     # -- IMU decoupling (TDK DS-000347 Table 10 BOM) ------------------------
     # NOTE the site<->value mapping. There is no +3V3 plane (F.Cu is the
@@ -237,6 +311,22 @@ COMPONENTS = {
     # Pololu 3415 pin order (research-confirmed): VDD VIN GND SDA SCL XSHUT
     # GPIO1. VDD is the breakout's 2.8V regulator OUTPUT — leave NC. XSHUT
     # has an onboard 47k pullup — safe to leave NC.
+    # REV C ATTEMPTED AND BACKED OUT: a 4-pin JST-SH surface-mount connector
+    # in place of this header. It is the single largest joint reduction on the
+    # board -- fourteen, seven here and seven on the Pololu carrier -- and it
+    # was placed legally (77 legal sites once the courtyard was read out of the
+    # footprint instead of estimated). It failed on ROUTING, not placement:
+    #
+    #   * J5's pigtail pads own the west plate from x -20.45 to -16.75, and
+    #     were in 34 of the 47 resulting DRC violations;
+    #   * the +3V3 B.Cu trunk runs a solid wall at x=-10.2 from y-10.8 to
+    #     y+5.4, so nothing crosses from U1 to the west plate on that layer;
+    #   * SDA and SCL have to swap over between U1's pin row and Qwiic pin
+    #     order, so they cannot both use the 5.6mm corridor between the
+    #     connector's two mechanical tabs.
+    #
+    # All three are consequences of a layout solved for a DIFFERENT part set.
+    # This needs the re-placement pass, like the bulk bank and the boost.
     "J2": dict(
         value="VL53L1X-Pololu",
         lib="Connector_PinHeader_2.54mm", footprint="PinHeader_1x07_P2.54mm_Vertical",
@@ -279,10 +369,22 @@ def audit():
                 continue
             assert net in NETS, f"{ref}.{pad}: unknown net {net}"
             used[net] += 1
-    for n in NETS:
-        if used[n] < 2:
-            print(f"  !! net {n}: only {used[n]} connection(s)")
+    # A net with fewer than two pads connects nothing to nothing. This used
+    # to PRINT '!!' and exit 0, so a stub net rode through every downstream
+    # gate: the board builds it, DRC sees a one-pad net as trivially routed,
+    # and preflight says CLEAR TO ORDER. Rev C adds several nets where a
+    # single-pad slip is easy (the Kelvin sense taps, the flow UART, the
+    # VBAT/VBAT_PACK split), so this now FAILS.
+    stubs = [n for n in NETS if used[n] < 2]
+    pend = [r for r, c in COMPONENTS.items() if c["pins"] == PENDING]
+    for n in stubs:
+        print(f"  !! net {n}: only {used[n]} connection(s)")
+    for r in pend:
+        print(f"  !! {r}: pins PENDING-RESEARCH")
     print(f"nets={len(NETS)} components={len(COMPONENTS)} connections={sum(used.values())}")
+    if stubs or pend:
+        print(f"FAIL: {len(stubs)} stub net(s), {len(pend)} PENDING component(s)")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
