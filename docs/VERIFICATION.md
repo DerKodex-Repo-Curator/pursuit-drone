@@ -210,7 +210,7 @@ Three reviewers. One returned DO_NOT_ORDER, two ORDER_WITH_NOTES.
 |---|---|---|
 | BLOCKER | **The round-3 C1 polarity fix was not on the board it certifies.** The only `+` legend near C1 was a `PIN1=+` on **F.SilkS** — the top face — for a part soldered on the belly, positioned at x≈141.5, i.e. on the **pad-2 (GND)** side of C1's centreline. The claimed `C1+` text did not exist anywhere. | Confirmed by measurement. Both markers rebuilt as glyphs placed at the + pad of the part they belong to and on that part's own face: `+` on F.SilkS beside J1 pad 1, `+ C1` on B.SilkS (mirrored) beside C1 pad 1. Now gated by preflight §7. |
 | MAJOR | **C84258 is Vf 2.6-3.6 V, not "Vf 2.6 V max".** 2.6V is the bottom of the bin. Verified against the live JLCPCB listing: `"2.6V~3.6V"`, Extended. Every white/blue 0805 is InGaN and behaves the same, so no resistor value rescues it — the upper bins never conduct from a 3.3V GPIO. The round-3 fix replaced a dark LED with a coin-flip LED. | LED1 → **C84261** (NationStar NCD0805Y1, yellow 0805, Vf 1.6-2.6V — same family and bin range as the already-verified red C84256). Worst-case 3.7mA, typical ~7.7mA. Front/rear still distinguishable by colour. R13/R14 stay at 150R. |
-| MAJOR | Five to ten placed parts violate JLCPCB's 2.5mm component-to-board-edge PCBA guideline (measured: LED1/LED2 ~0.5mm, D1-D4 ~0.7mm, C8/R11/R12/R14 ~1.2mm). | **Accepted, not fixed.** This is inherent to a 12mm-arm X-frame; meeting 2.5mm means redesigning the airframe. Documented in README as an expected DFM query with the bare-board fallback stated. |
+| MAJOR | Five to ten placed parts violate JLCPCB's 2.5mm component-to-board-edge PCBA guideline (measured: LED1/LED2 ~0.5mm, D1-D4 ~0.7mm, C8/R11/R12/R14 ~1.2mm). | ~~**Accepted, not fixed.** Inherent to a 12mm-arm X-frame.~~ **THE MEASUREMENTS WERE WRONG — see §15.** Re-measured 2026-08-22 against the real Edge.Cuts polyline: D1-D4 are at **4.65mm** and LED1 at **2.57mm**, both compliant. The "inherent to the airframe" conclusion, and the bare-board fallback it justified, rested on numbers off by up to 6.6x. |
 | MAJOR | Order specified HASL, but U2 is a bottom-terminated LGA-14 on 0.5mm pitch with hidden fillets. | **ENIG** now specified in README. No file change. |
 | MINOR | A stale `PURSUIT-1_placement.csv` (mtime older than the board, still carrying `470R` for R13/R14 and listing bottom-side + THT parts) sat in `gerbers/` under a name that reads like the pick-and-place file. | Deleted. preflight now fails on *any* file in `gerbers/` older than the board, and on any unexpected `.csv` in that directory. |
 | MINOR | **The origin gate did not work.** `re.findall(r"X(-?\d+)", edge)` also matched the format-spec line `%FSLAX46Y46*%`, yielding a phantom X=0.000046 that made the lower bound vacuous — and there was no Y check at all, though the bug it guards against was a two-axis offset. | Rewritten to parse only `X..Y..D0[123]` draw operations and to bound **both** axes against the Edge.Cuts bbox. |
@@ -336,3 +336,564 @@ did clear in the previous round.
 
 Board hash at release: `6b86f2c7b846d719` (unchanged — this round changed the
 BOM/CPL and the documentation only)
+
+---
+
+## 14. Rev B — the bring-up defects designed out
+
+Rev A flew nothing. Every hardware fault found during bring-up was a hand-made
+solder joint, never a part and never the netlist: five cold joints (two motor
+pins, two header pins, the 3V3 socket) and then two lifted annular rings when
+those joints were reworked, which is what finally ended that board. This round
+changes the design so the same builder gets a different outcome.
+
+### The root cause, and the one number that fixes it
+
+A 1.8mm pad on a 1.0mm drill leaves a **0.40mm annulus**. The zone's thermal
+spoke was also **0.40mm**. A spoke has to fit inside the annular ring, so none
+could be placed, and KiCad quietly fell back to a **solid** pour connection on
+every through-hole pad touching a plane. A solid tie into 2200mm² of 1oz copper
+carries heat away from the joint faster than a hand iron delivers it — so the
+pads that were hardest to solder were exactly the ones carrying the plane.
+
+The spoke is now **0.30mm** (`gen_pcb.add_zone`). Relief forms in the annulus
+that already exists. Two 0.3mm spokes in 1oz carry ~0.9A each (IPC-2221, 10°C
+rise) against a module whose worst case is a WiFi TX burst under 0.6A. The four
+motor terminals, J1 and J5 — the pads that really do carry the pack — are still
+forced solid in `build()`.
+
+### What was tried first and abandoned
+
+Widening the pads until a 0.4mm spoke fits. It does not work on this board and
+the DRC said so twice:
+
+| Attempt | Result |
+| --- | --- |
+| XIAO pads 1.8 → 3.0mm, symmetric | 16 tracks in violation. The waist between the two rows carries every signal on the board. |
+| Same, grown outboard only via a drill offset | Still 16. SCL, M2_PWM, LED_CTRL and VBAT_SENSE run in the channel **outboard** of the pad column too. |
+| Grown along the row (2.3mm) | 12 more. The 0.74mm gaps **between** pads in a column are themselves routing lanes. |
+| J4 pads, any direction | 12. SDA and SCL thread the gap between its two pads; the +3V3 corridor and C6 sit immediately outboard. |
+
+The XIAO carrier cannot grow in any direction, and that is now written into
+`footprints.py` so the next person does not spend the afternoon rediscovering
+it. Growing pads was the intuitive fix; changing the spoke was the correct one.
+
+### A latent defect this round created and caught
+
+The outboard-offset attempt wrote the offset into the pad's `(at ...)` and the
+negated offset into `(drill ... (offset ...))`. That is backwards: `at` is the
+pad **anchor**, which for a through-hole pad is the hole, and the drill offset
+moves the **copper**. The result was fourteen XIAO holes 0.6mm off the module's
+pin grid — a board no XIAO would seat in — while every render still looked
+correct. DRC surfaced it only indirectly, as a 0.14mm pad-to-pad clearance
+error inside the motor footprint.
+
+`footprints._check_holes` now reads the holes back out of each generated
+footprint and asserts the pitch of the part that mates with it. Re-introducing
+the inversion fails the build with `hole spacing across the rows is 16.44,
+expected 15.24`.
+
+### A blind spot in the island audit
+
+`audit_islands.py` attributed a pad to the fill polygon containing its centre.
+A thermally relieved pad sits in a **hole** in that polygon, so the audit saw
+no pad there — for every relieved pad on the board. Before this round almost
+every pour pad was solid and the distinction never showed; with relief it would
+have gone blind exactly when it started to matter. It now tests a ring of
+points just outside the relief gap, which works for solid and relieved alike.
+
+Running the corrected audit against the rev A board reproduces rev A's result
+exactly, so the fix changed the gate's sensitivity, not its verdict.
+
+### J4 keeps its solid tie
+
+Relieving J4.1 splits the F.Cu VBAT pour into 2281mm² plus a stranded 91mm²
+pocket: that pad is the only place the pour crosses the waist, and the +3V3
+corridor at y5.7 and the J2 pad row fence the gap completely. J4 was not one of
+the five failures. It stays solid and the plane stays whole — VBAT is now a
+**single polygon**, where rev A had it fragmented around R11.
+
+### Also in rev B
+
+| Change | Why |
+| --- | --- |
+| Divider R11/R12 100k → 10k (`C25803` → `C25804`) | 100k/100k presents ~50kΩ to an ESP32-S3 ADC that needs <10kΩ to charge its sample-and-hold. Bring-up read a textbook battery sag under throttle, r²≈1.0 against PWM duty, that was entirely an artefact of the divider. 10k/10k presents 5kΩ and draws 210µA. |
+| TP1/TP2/TP3 — VBAT, 3V3, GND | Rev A had no test point. Every rail measurement was taken on a pad that was also a joint, and a probe on a marginal joint measures the probe. Two of those pads eventually lifted. The row sits on the north plate, the only large area **not** under the module (the XIAO body covers x ±8.9, y −18.5..+2.5), with VBAT / 3V3 / GND on the top silk beside it. |
+| Motor pads 2.0 → 2.4 × 2.0 oval, copper 0.30mm outboard | Annulus 0.50 → 1.00mm on the pads most likely to be reworked — a motor swap is the repair this airframe needs repeatedly. Offsetting outboard also opens pad-to-pad from 0.54 to 0.74mm, where growing symmetrically would have closed it to 0.14mm. |
+| J5 pads 2.8 → 3.9 × 3.3 oval, copper 0.6mm outboard | Annulus 0.65 → 1.80mm, pad gap 0.50 → 1.70mm. J5 is where rev A lost an annular ring outright. Moved to (−18.6, −8.5) to clear Q1. |
+| `board_probe_points.png` retired | A hand-annotated bring-up screenshot that no generator produced, so it could only go stale, and did. The board now carries the same information on its own silk. |
+
+### Gate results
+
+| Gate | Rev A | Rev B |
+| --- | --- | --- |
+| `check_place.py` | 0 | **0** |
+| `check_sch.py` | 22 nets / 116 pins | **22 nets / 116 pins** |
+| DRC (errors + warnings, zones filled) | 7 violations | **0 violations, 0 unconnected** |
+| `audit_islands.py` | FAIL — VBAT fragmented | **PASS — VBAT one polygon** |
+| `preflight.py` | — | **0 failures, 0 warnings → CLEAR TO ORDER** |
+
+Board hash at release: `36ffab05e1d2544b`
+
+### Not done
+
+The BOM still splits at the same place: headers, the JST and C1 remain "YOU"
+rather than JLCPCB assembly. Moving them needs LCSC codes verified the way
+`C25804` was verified here, and an unverified code silently fits the wrong
+part. The snapshot database also reported 0 stock for `C25804`, which for the
+most common resistor value in existence reads as a stale snapshot rather than a
+real shortage — re-check at order time.
+
+---
+
+## 15. The component-to-edge claim was folklore
+
+Rounds 4 and 5 recorded that this board cannot meet JLCPCB's 2.5mm
+component-to-board-edge rule, that the cause was "inherent to a 12mm-arm
+X-frame", and that the fallback was to order bare boards and hand-build them.
+That conclusion was accepted twice and written into README's ordering section.
+
+It was measured against nothing. `check_place.py` had no body-to-edge rule at
+all — its only edge test compared *courtyard* corners against `PLATE` and
+`DIAG`, hand-maintained constants that model the outline rather than being it.
+
+Measuring package **bodies** against the actual `Edge.Cuts` polyline and the
+four prop rings:
+
+| part | claim in the docs | measured |
+| --- | --- | --- |
+| D1-D4 | ~0.7 mm | **4.65 mm** |
+| LED1 | ~0.5 mm | **2.57 mm** |
+| LED2 | ~0.5 mm | **0.87 mm** |
+| C8, R11, R12, R14 | ~1.2 mm | 1.60 mm |
+| C10-C13 | not mentioned | 1.80 mm |
+
+Nine parts are inside 2.5 mm; none is inside the 0.3 mm depanelling-risk line.
+The two the docs singled out as worst are the two that were already fine, and
+the actual worst offender — LED2 — was never named. Every one of the nine is a
+plate or arm part that moves by millimetres.
+
+The cost of the error was not a bad board; it was a bad *decision*. "The
+airframe cannot meet this" ended the enquiry, and the fallback it justified
+was giving up on machine assembly — on a project whose every hardware failure
+has been a hand-soldered joint.
+
+Now gated: `check_place.py` FAILs below 0.30 mm and WARNs below 2.50 mm,
+measured from rotated body corners to the real outline. It also gained a
+zero-back-side-placements gate, because JLCPCB's Economic PCBA has no
+double-sided option at any price — one belly part moves the whole order to
+Standard, roughly $58 of fixed fees, about ten times what two extra copper
+layers cost.
+
+---
+
+## 16. Rev C, part 1 — four layers, and the gate that would have shipped them blank
+
+The board is now four copper layers: **L1 signal / L2 solid GND / L3 solid VBAT
+/ L4 signal**. The inner planes are ADDITIVE — the rev B outer pours stay
+exactly where they were, so every hand-derived track in `routes.py` keeps its
+lane and nothing had to be re-routed by hand.
+
+### The defect this round nearly shipped
+
+`release.py` listed its export layers as a literal:
+
+    GERBER_LAYERS = ("F.Cu,B.Cu,F.Paste,...")
+
+and `preflight.py` checked the zip against a hardcoded list of ten filenames.
+Both survive a 2 → 4 layer change **without a word**. The board would have been
+four layers, the fab would have built a four-layer stackup, and the gerbers
+would have carried two **blank inner layers**. Every gate green, order placed,
+five dead boards.
+
+Both sides now derive the layer set from the board itself, independently:
+`release.py` parses the `(layers …)` block; `preflight.py` cross-checks
+`GetCopperLayerCount()` against the gerber job file's `LayerNumber` **and**
+against the count of `Copper,Ln` FileFunction entries — matching on function
+rather than filename, because the Protel inner-layer extensions (`.g1`, `.g2`)
+are another convention not worth hardcoding.
+
+Negative-tested: forcing the job file to claim 4 layers on the 2-layer board
+gives `FAIL gbrjob says 4 copper layers, board has 2` → DO NOT ORDER.
+
+### The second one, which is worse because it is invisible
+
+`add_keepout()` and `add_round_keepout()` defaulted to `(F_Cu, B_Cu)`.
+
+Adding inner planes without touching that leaves the four motor keepouts
+holding copper clear on the outer layers **only**. The metal motor cans span
+the full board thickness. An In2 VBAT plane and an In1 GND plane, both flooding
+under a motor can, is a pack short through the airframe — and **DRC has nothing
+to say about it**, because the planes are legitimately there and the motor can
+is not in the design at all.
+
+Both now default to `all_copper()`, derived from `COPPER_LAYERS`. Verified on
+the built board: all four motor keepouts and the antenna keepout span
+`F.Cu,In1.Cu,In2.Cu,B.Cu`, while the IMU keepout correctly stays F.Cu-only
+(deliberate — the pour is wanted under the sensor as its reference).
+
+### Also corrected
+
+Copper layers were being sorted by KiCad's internal layer id, which numbers
+F.Cu 0 and B.Cu 2 with the inners *above* both — yielding `F, B, In1, In2`.
+That is not a stackup, and it was about to become the order in the gerber job.
+Now sorted by physical position; the job file declares L1 Top, L2 Inr, L3 Inr,
+L4 Bot.
+
+### New: `make board`
+
+One command for the whole chain, because every step of it has been got wrong at
+least once — the two interpreters, the out-of-process zone fill, and above all
+**never piping a gate**: `kicad-cli … --exit-code-violations | tail -3` reports
+*tail's* exit code. A run that returned 5 with 199 violations was once read as
+clean through exactly that. Every gate now writes to a file and is read after.
+
+### New: plane renders
+
+Inner copper appears in no other artefact — not the 3D render, not the assembly
+drawings, not the silk. `docs/plane_in1_gnd.svg` and `plane_in2_vbat.svg` are
+the only way a human ever sees L2 and L3, and both are staleness-gated.
+
+### Result
+
+| | rev B (2 layer) | rev C (4 layer) |
+| --- | --- | --- |
+| DRC, `--severity-all` | 0 / 0 | **0 / 0** |
+| Zone-island audit | PASS | **PASS** |
+| GND plane | B.Cu 2341.8 mm² | **In1.Cu 2839.1 mm², 1 polygon** |
+| VBAT plane | F.Cu 2378.3 mm² | **In2.Cu 2858.2 mm², 1 polygon** |
+| Gerber files in zip | 13 | **15** |
+| Order gate | CLEAR | **CLEAR** |
+
+The In2 VBAT plane is tied at **all four motor terminals plus J1, J4, J5 and
+TP1** — eight through-hole pads — so it genuinely parallels the pack path
+rather than merely existing. `check_ground.py` (itself repaired this week, see
+§14) now selects the inner planes as the reference for both nets and reports
+zero fragments off-plane.
+
+**Netlist unchanged.** This round is four layers and nothing else, so it is a
+clean baseline to add the INA226, the keyed J4, the merged battery input and
+the flow connector against.
+
+---
+
+## 17. Rev C, part 2 — the belly caps, and what the board refused
+
+`C10-C13`, the four VBAT bypass ceramics at the flybacks, have moved from the
+**belly to the top face**. Four fewer hand joints, and bottom-side SMD drops
+from five parts to one.
+
+It was not a one-line move. Each step below was found by DRC, not by planning:
+
+| attempt | what broke |
+| --- | --- |
+| move to top at perp 2.7 (also clearing the 2.5mm edge rule) | the cap's GROUND pad closed to **0.8mm centre-to-centre** with the flyback's VBAT via cluster at perp 1.9 — zero copper clearance, nine violations |
+| back to perp 3.4, GND via at perp 4.6 | on **arm 2 only**, the via landed on the LED1_A lane |
+| arm 2 via to perp 5.1 | still on it — `routes.py`'s own docstring says "lane +3.9", but measured in arm-local coordinates LED1_A actually **runs at perp 5.00** for r 26..35.8. 3.9 is where it enters, not where it runs. |
+| arm 2 via to perp 4.2 | 0.15mm from the cap's own **VBAT** pad — the one pad it must not touch |
+| arm 2 via to (r 30.2, perp 4.2) | clean |
+
+The lesson is in row three. The docstring was not wrong so much as describing a
+different thing, and three iterations were spent trusting it. Measuring the
+actual track in arm-local coordinates settled it in one query.
+
+Also: the arm legends moved from perp +3.9 to **−3.9**, because the caps came
+up into +3.4 and silk printed across a mask aperture ends up on the solder.
+−3.9 is where `PURSUIT-1` has always sat on arm 1, so the set is now consistent
+rather than merely clear. The revision mark reads **REV C**.
+
+### What the board refused
+
+`C1`, the 220 µF 7343 polymer, was to become six 100 µF 1206 ceramics — the
+reasoning was good (C1 is polarity-critical, hand-fitted, and sits across an
+unfused LiPo, so reversed it vents) and it is **backed out**, because the board
+will not take them.
+
+A scan against every track, via, pad and courtyard on both faces, plus the real
+`Edge.Cuts` loop and the four prop rings, found **exactly one site** on the
+whole plate clearing all three constraints. The arms have none: a 12 mm arm
+with a 2.5 mm component-to-edge rule leaves ±1.45 mm of usable width, and the
+flyback diode is already in it.
+
+So the swap is a **routing** job, not a placement job. Recorded as such in
+`design.py` rather than left as an intention.
+
+Two process errors of my own are worth recording, because they are opposites:
+
+- the first placement scan checked **courtyards and edges but not copper** — 29
+  violations, parts sitting on live tracks;
+- the second checked **copper but not courtyards** — 5 violations, parts inside
+  U1, J1 and J5.
+
+On a board this dense, "no part is there" and "no copper is there" are entirely
+different questions, and a site has to answer both.
+
+### A gate earning its keep
+
+Moving C10-C13 to machine assembly made preflight refuse the BOM twice, both
+times correctly:
+
+1. `LCSC code 'TBD' is not a C-number` — they had no part number, because
+   nothing hand-fitted needs one.
+2. `LCSC C14663 assigned to differing values ['100nF', '100nF/16V X7R']` — the
+   value field had carried a *requirement* ("16V") where the assembler reads an
+   *instruction*. Harmless while hand-fitted; wrong the moment a machine reads
+   it. Normalised to `100nF`, the same string as C3 and C8, which is the same
+   physical part.
+
+### Result
+
+| | rev B | rev C now |
+| --- | --- | --- |
+| Copper layers | 2 | **4** |
+| Machine-assembled parts | 29 | **33** |
+| Bottom-side SMD | 5 | **1** (C1 only) |
+| DRC `--severity-all` | 0 / 0 | **0 / 0** |
+| ERC | 0 | **0** |
+| Order gate | CLEAR | **CLEAR** |
+
+Still open, in order: C1's bulk-bank swap (needs routing), J2's Pololu breakout
+→ bare VL53L1X (removes the last belly part and 7 THT joints), the keyed J4,
+the J1/J5 merge with the INA226 shunt, and the flow connector.
+
+---
+
+## 18. A correction, and a swap that was a trap
+
+### The correction
+
+Sections 16 and 17 justify moving parts off the belly by saying that JLCPCB's
+Economic PCBA is single-sided at any price, so one bottom-side part costs ~$58
+in tier fees. **That reasoning does not apply to this board, and I was wrong to
+state it.**
+
+`gen_jlcpcb.py:95-97` skips through-hole parts and bottom-side parts as
+hand-soldered, so they never enter the JLCPCB job at all. Verified against the
+shipped CPL: **all 33 assembled parts are `Top`, and always were.** C1 and J2
+are hand-fitted, so they have never affected the assembly tier.
+
+The belly-to-top move of C10-C13 was still worth doing — it converted four
+**hand-soldered** joints into machine-placed ones, and hand joints are the only
+thing that has ever broken this project. But it saved joints, not dollars, and
+the write-up should have said so.
+
+### The trap
+
+Replacing the Pololu VL53L1X carrier with the bare `VL53L1CXV0FY/1` was the next
+planned change. It is **not being done**, and the reason inverts its own premise:
+
+**The part is flagged "Standard Only" at JLCPCB.** One Standard-Only part removes
+the *entire order* from Economic PCBA regardless of which side it sits on. And
+the VL53L1X's optical windows are on the **top of the package, opposite the LGA
+pads** — so a downward-looking rangefinder must be belly-mounted, making it the
+only bottom-side machine part and forcing Standard **double-sided**.
+
+| | setup + stencil |
+| --- | --- |
+| Economic single-side — where rev C sits today | $9.71 |
+| Standard double-side — the only useful orientation | $67.54 |
+
+**+$57.83** to save roughly $50 of Pololu carriers across five boards, and to
+acquire: MSL 3 handling whose standard 125 °C rebake exceeds ST's own 85 °C
+storage maximum; a 245 °C absolute-maximum reflow against house profiles that
+commonly peak 245–250 °C; a no-wash, no-ultrasonic, convection-only process; and
+a **protective liner over the optics that survives 260 °C reflow and must be
+peeled afterwards** — with nobody able to confirm whether JLCPCB does it. If they
+do not, five boards return with a blind rangefinder and no error anywhere.
+
+LGA-12 also has no fallback: twelve 0.5 mm pads entirely under the body, no
+castellations, so it cannot be hand-soldered if the machine declines it.
+
+Seven hand joints is a real cost. It is not worth a blind-sensor risk, a tier
+change and a new class of process constraint on a project whose entire problem
+is boards that do not work.
+
+The datasheet research is kept in `docs/VL53L1X_ONBOARD.md` — full
+pin-by-pin map from ST DocID031281 Rev 3, the optical exclusion-cone geometry
+(which constrains where the battery may sit *whatever* sensor is fitted), and
+the calibration rules. Nobody should have to research it twice.
+
+### What survives from it anyway
+
+Two findings apply to the board as it stands, with the Pololu carrier:
+
+- **The battery must not sit under the rangefinder, and its strap must not cross
+  the optical cones.** Velcro, tape and heatshrink are all IR-reflective at
+  940 nm and present as a permanent ~5 mm target — below the 4 cm minimum range.
+  The sensor would return a constant instead of a height, silently.
+- **Nothing may bear on the sensor cap** — 25 N maximum. A tensioned strap over
+  it cracks the optics.
+
+Neither is currently checked by anything.
+
+---
+
+## 19. Pre-order audit — everything checked against the artefacts, not the docs
+
+Run before committing money. Five independent audits, none of which trusts the
+generator that produced the thing being checked.
+
+**1. Gate tables vs the live design.** Every component placed and every
+placement a component (48/48). `REFS` covers all 48 and every shape it names
+exists. No table — `REFS`, `ALLOWED`, `THT`, `ON_ARM`, `HAND_FITTED`,
+`BACK_SIDE_ALLOWED` — names a part that no longer exists. The back-side
+allow-list exactly equals what is actually on the back (`C1`, `J2`). 22 nets,
+none with fewer than two pads, nothing PENDING. **PASS**
+
+**2. The shipped drill file vs the board.** Counted independently out of
+`pursuit.drl` and out of the board: **111 holes both ways**, seven tools, every
+diameter matching (0.40 ×63, 0.75 ×2, 0.90 ×3, 1.00 ×29, 1.20 ×2, 1.50 ×2,
+3.20 ×10). The zip carries 15 files. **PASS**
+
+**3. Do the inner layers actually contain copper?** The specific disaster
+§16 guards against is a four-layer stackup with blank inners. Counted apertures
+and draw commands in the gerbers themselves: `In1_Cu` 141 kB / 5261 draws,
+`In2_Cu` 156 kB / 5827 draws. Not blank. **PASS**
+
+**4. Every historical defect, re-verified against the board.** This project's
+recurring failure is a doc certifying a fix that was never on the copper, so all
+21 were re-read out of the `.kicad_pcb`: thermal spoke 0.3 mm; MinResolvedSpokes
+1; divider 10k; LED1 not white; C6/C7 dnf; R5–R8 1k; four copper layers; both
+inner planes single polygons; all four motor keepouts spanning all four layers;
+the IMU keepout still deliberately F.Cu-only; TP1/TP2/TP3 on VBAT/+3V3/GND; the
+XIAO hole rows exactly 15.24 mm apart (the drill-offset bug); and the `+ C1`,
+`J1+` and `REV C` silk markers present. **21/21 PASS**
+
+**5. Every part number, for existence and stock.** 12 of 13 lines have between
+265 k and 12.6 M in stock. One flag:
+
+> **C25804 (the 10k divider) reports ZERO stock.**
+
+Almost certainly a stale snapshot — it is UNI-ROYAL's standard 10k 0603 1% and
+one of JLCPCB's most-used Basic parts — but that is not something to discover
+after paying. **Check it live at order time.** A verified identical-spec drop-in
+is recorded in `gen_jlcpcb.py`: **C2906982** (FRC0603F1002TS), same 100 mW /
+10 kΩ / 75 V / thick film / ±1% / ±100 ppm/°C / 0603, 10.3 M in stock, Extended
+so it costs one $3 setup fee.
+
+And a trap worth naming: **C23192 is 510 kΩ, not 10 kΩ**, despite sitting one
+digit away in the same UNI-ROYAL series. Substituting it would put 4.2 V
+straight onto the ADC pin. It is called out in both the BOM and the LCSC map.
+
+### Gate run, unpiped, exit codes honoured
+
+| gate | exit |
+| --- | --- |
+| `design.py` netlist audit | 0 |
+| `check_place.py` | 0 |
+| `check_sch.py` netlist parity | 0 |
+| `audit_islands.py` | 0 |
+| `check_ground.py --net GND` / `--net VBAT` | 0 / 0 |
+| `kicad-cli sch erc` | 0 |
+| `kicad-cli pcb drc --severity-all` | 0 |
+| `preflight.py` | 0 |
+| firmware host tests (125) | 0 |
+
+Ten for ten, none of them piped.
+
+## 20. 2026-09-21: the motor pads leave the solid list, and a rules file that was never part of the build
+
+Done on the day of ordering, because the question asked was "make sure these are working boards" and the
+answer had to come from the copper, not from section 14's prose.
+
+### What was measured
+
+A ring was walked around every hand-soldered through-hole pad, half-way across the thermal gap, on every
+copper layer that carries a pour for that pad's net, and the fraction of the ring that is copper recorded.
+About 100% is a solid tie; 5 to 35% is spokes.
+
+| pads | rev A (built, five cold joints) | rev C before today | now |
+| --- | --- | --- | --- |
+| U1.9 GND (XIAO header) | 80%, one layer | 5% B.Cu, 19% In1 | 19%, 19% |
+| J2.3, TP1, TP3 | 12% | 10 to 16% | unchanged |
+| **MT1-MT4 pad 1 (motor +)** | **89%, one layer** | **95% F.Cu AND 100% In2** | **9% and 9%** |
+| J1, J5 (pack terminals), J4 | solid | solid, both layers | unchanged, deliberately |
+
+So section 14's fix is real for the header and the socket, and it never reached the two motor pins that
+made up the rest of the five. Rev B widened their annulus and left the tie; rev C's In2 plane then tied the
+same four pads solidly into a second plane. The stated reason, that the motor terminals "carry the pack",
+does not hold: one terminal carries one motor (2.75 A at stall) and each already ends a dedicated 1.2 mm
+B.Cu VBAT spine, which is why `check_ground.py` still reports 18 VBAT pads on the plane and 0 off it.
+
+### The change
+
+`gen_pcb.py`: `("MT1", "MT2", "MT3", "MT4", "J1", "J4", "J5")` became `("J1", "J4", "J5")`. Nothing else.
+
+### Proof that nothing else moved
+
+The rebuilt board was compared structurally with the previous verified one (md5 `79a0a6d0d508...`):
+58 / 58 footprints with identical positions, pads, nets and graphics, the only difference being the
+zone-connection flag on MT1-MT4; 270 / 270 tracks and vias identical; 10 / 10 zone definitions identical;
+330 / 330 board graphics identical; GND copper on B.Cu and In1 identical with zero changed patches; VBAT
+copper with nothing added and exactly one pad-plus-gap knockout removed per motor pad (6.25 mm2 on F.Cu,
+6.43 mm2 on In2, equal on all four arms). BOM, CPL and the orientation sheet are byte-identical.
+New board md5 `8df9e419b62a9bf041c74feef6a6e31a`, preflight hash `063ea4f53800d7c1`.
+
+### The rules file
+
+The first rebuild did NOT reproduce the old copper: the pours grew by about 10% on every layer. Cause: an
+untracked symlink, `hardware/pursuit.kicad_dru -> ~/hw/drc/JLCPCB_4L.kicad_dru`, created 2026-09-13, three
+weeks after the board was last built and after every review in sections 14 to 19. KiCad loads a
+`<project>.kicad_dru` automatically, and two of that file's rules are unconditional, so on refill they
+override the board's own settings. Measured by refilling scratch copies under one rule at a time
+(baseline B.Cu 2404.0 / In1 2839.1 / F.Cu 2334.2 / In2 2826.3 mm2):
+
+| rules file contains | B.Cu | In1 | F.Cu | In2 |
+| --- | --- | --- | --- | --- |
+| only `(constraint clearance (min 0.127mm))` | +197.5 | +60.4 | +155.0 | +61.8 |
+| only `(constraint edge_clearance (min 0.3mm))` | +44.9 | +45.0 | +48.9 | +45.2 |
+| the whole file | +243.7 | +106.6 | +200.5 | +107.3 |
+
+The clearance rule beats the pours' 0.3 mm local clearance and lets them close to 0.127 mm from tracks,
+pads and via barrels; the edge rule beats `gen_pcb.py`'s 0.4 mm copper-to-edge and moves every pour 0.1 mm
+nearer the outline, on all four layers of an airframe whose edge is 600 mm long. The same file's "Minimum solder mask sliver" rule is written
+as a bare `silk_clearance`, fires on silk over any copper, and fills the report to KiCad's cap of 199 per
+type, which is the 199 this Makefile already warns about. The old board had never been refilled since the
+link appeared, so it kept 0.3 mm; nobody had run `make board-gates` since, or step 7 would have failed.
+
+The link was moved aside (`hardware/pursuit.kicad_dru.linked_20260913_moved_aside`) and the board built
+the way it was on 2026-08-22. The finished board was then checked, without refilling, against that
+4-layer rules file minus the silk rule: 0 violations, 0 unconnected. Do not restore the link until the
+shared file scopes its clearance rule away from zones, or the next refill silently re-tightens every pour.
+
+### Gate run, unpiped, exit codes honoured
+
+`make board` exit 0: footprints, `design.py`, `check_place.py` (0 violations, the 9 known edge warnings),
+`gen_sch.py`, `gen_pcb.py`, ERC 0, DRC `--severity-all` 0 violations / 0 unconnected, `check_sch.py`,
+`audit_islands.py` (every pour one polygon), `check_ground.py` GND and VBAT, `release.py`,
+`gen_jlcpcb.py`, `preflight.py` 0 failures / 0 warnings.
+
+What this does not show: that a joint is good. That is still an iron, flux and a meter, and BRINGUP's
+"reflow every hand joint" stands. J1, J5 and J4 remain solid by design and want the most heat.
+
+## 21. 2026-09-21, on the order page: all four motor FETs were 180 degrees round
+
+Section 12 left the SOT-23 rotation "unresolved, read it off the preview". Read off the preview, it was wrong.
+
+JLCPCB does not rotate KiCad's footprint; it rotates ITS OWN footprint for the LCSC code, and that footprint's
+zero need not be KiCad's. Fitting KiCad's pads against JLCPCB's footprint for each polarised part
+(`easyeda.com/api/products/<LCSC>/components`), by pin FUNCTION:
+
+| part | LCSC | JLCPCB footprint fits KiCad's at | runner-up | CPL before | verdict |
+| --- | --- | --- | --- | --- | --- |
+| Q1-Q4 AO3400A (1=G 2=S 3=D in both) | C20917 | **180 deg**, 0.06 mm | 270 deg, 1.95 mm | raw KiCad angle | **180 deg out** |
+| D1-D4 SS34 (1=K in both) | C8678 | 0 deg, 0.20 mm | 90 deg, 2.97 mm | raw | correct |
+| LED2 red (1 = cathode in both) | C84256 | 0 deg, 0.16 mm | 90 deg, 1.45 mm | raw | correct |
+| LED1 yellow | C84261 | 180 deg BY PAD NUMBER | | raw | correct: JLCPCB numbers the ANODE 1, KiCad the cathode, so by function it is 0 |
+| U2 ICM-42688-P | C1850418 | 0 deg, 0.10 mm | 90 deg, 2.05 mm | raw | correct |
+
+JLCPCB's preview agreed on every row: cathodes inboard, U2 pin 1 front-left, LED anodes outboard, and on Q1-Q4
+the pin-1 dot OUTBOARD with the three leads straddling the gaps between pads, where this board puts the single
+drain lead outboard. It is the same JLCPCB footprint (uuid `bade9066...`) that makes the RL car's Q1 carry +180;
+that project derived its corrections on 2026-09-17, this one never did.
+
+Fix: `gen_jlcpcb.JLC_ROTATION = {"C20917": 180.0}`, added to KiCad's angle when the CPL is written. `preflight.py`
+states the same fact a second time, by designator family (`CPL_FRAME_OFFSET = {"Q": 180.0}`), so dropping the
+correction from the generator fails the gate. Negative-tested with the old CPL: 4 failures, DO NOT ORDER. Only
+four CPL rows changed (Q1 135 -> 315, Q2 45 -> 225, Q3 225 -> 45, Q4 315 -> 135); BOM, board and gerbers untouched
+(board md5 `8df9e419...`, preflight hash `063ea4f53800d7c1`). After re-upload the preview shows all three leads on
+pads and the drain outboard on all four.
+
+What this does not replace: the DFM placement render JLCPCB produces after payment. Both orders were saved with
+Confirm Parts Placement = Yes and "Do not confirm automatically" ticked, so nothing is assembled until that
+render has been walked against `ORIENTATION_CHECK.csv` and approved by hand.

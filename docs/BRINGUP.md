@@ -47,6 +47,35 @@ body diode conducts, the gate does nothing, and no motor ever turns.
 
 ---
 
+## 0. SOLDER IN THIS ORDER, AND TEST AFTER EVERY GROUP
+
+Added after rev A. On that board everything was soldered first and debugged
+afterwards, so when the IMU came back dead there were fifty candidate joints.
+Each group below is small enough that a failure has ONE plausible cause, and
+each has a test you can run before the next group goes on.
+
+**Do not proceed to the next group until the current one passes.** A joint you
+have to rework later is the joint most likely to lift a pad — that is how rev A
+finally died, twice.
+
+| # | solder | joints | then test |
+| --- | --- | --- | --- |
+| 1 | 2× 1×7 **female** sockets | 14 | Continuity from each socket to its net at TP1/TP2/TP3 or the nearest part. **Check for bridges between adjacent pins — this is exactly what went wrong on rev A.** No module fitted yet. |
+| 2 | *(none — plug the module in)* | 0 | USB enumerates. `bench 'b'` I²C line test. `bench 's'` finds the IMU at 0x68 and reads `who_am_i = 0x47`. |
+| 3 | J1 battery connector | 2 | **Meter first, battery second.** Verify polarity at J1 against the `J1+` silk before anything is plugged in. Then pack on: TP1 reads pack volts, TP2 reads 3.3 V, TP3 is ground. |
+| 4 | C1 bulk cap (belly, **polarised**) | 2 | `+ C1` on the belly silk marks pad 1. Check for a VBAT-to-GND short at TP1/TP3 **before** reconnecting the pack. |
+| 5 | ToF header + carrier | 14 | I²C scan finds 0x29. `bench 's'` reports a plausible height. |
+| 6 | Motor wires, 4 × 2 | 8 | **Props OFF.** `bench '1'`–`'4'` — each motor spins on its own. A motor that does not spin is one of two joints, not fifty. |
+| 7 | J4 → module BAT pads | 4 | **Meter the polarity twice.** This is the pair that destroyed a XIAO on rev A. Then: unplug USB, run on battery alone. |
+
+Running total: 44 joints. The module's own 14 are already done if you bought
+the pre-soldered XIAO — which is why the sockets in group 1 must be **female**.
+
+**Before any of it:** solder a spare bare rev A board. They are worthless now.
+Fit sockets, fit a header, tack wires to the motor pads, then cut them off and
+do it again. Twenty minutes on a board you cannot damage is worth more than
+being careful on the one that matters.
+
 ## 1. Bare board, no components energised
 
 Before the XIAO goes anywhere near the headers.
@@ -175,7 +204,32 @@ the Q1–Q4 rotation question above first — that is the likeliest cause).
 
 ## 6. Battery, first plug-in
 
-Use a fused or current-limited lead if you have one.
+**REVERSAL GATE — this is how rev A died. Do not skip any line.**
+
+A reversed pack puts ~20 A through the Q1–Q4 body diodes and the SS34s in
+series (design.py: FET sources on GND, Schottky cathodes on VBAT). The XIAO
+dies in milliseconds through J4. A fuse opens seconds later — it protects the
+pack and the wire, NOT the silicon. The only thing that protects the silicon
+is never letting a reversed pack reach J1. So:
+
+- [ ] Build the J5 pigtail FIRST, before any pack exists on the bench. Meter it
+      end-to-end. Heat-shrink: **red on +, black on −**. This is the only lead
+      that ever plugs into this board.
+- [ ] Every new pack, on arrival, before its first plug: meter the pack
+      connector. JST-PH polarity is NOT standardised between vendors — the
+      2026-08-20 board was killed by a vendor-mis-pinned pack, not by a slip.
+      Write the result on the pack with a marker: `✓ + LEFT` (or whatever
+      the metered truth is). A pack with no mark does not get plugged in.
+- [ ] Pigtail + marked pack: meter the pair mated, TP1 to TP3, **before** the
+      board end goes on. Positive on TP1. If you cannot read a positive
+      voltage, stop.
+- [ ] Sign it: `polarity verified ______ (date) ______ (initials)` — here, in
+      this file, before the pack meets J1.
+
+A fuse in the pigtail is optional and NOT a reversal defence. If you fit one,
+it must measure ≤10 mΩ loop resistance (the 9.82 A sag margin is only 0.11 V
+— a cheap holder eats all of it) and `sim/worst_case.cir` must be re-run with
+the measured resistance before any flight.
 
 - [ ] Pack voltage on the divider matches a meter within ~0.05 V. The
       firmware reads it through `analogReadMilliVolts` (eFuse-calibrated)

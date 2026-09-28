@@ -1,6 +1,6 @@
 # PURSUIT-1 — Person-Following PCB-Frame Micro Quad
 
-The PCB **is** the airframe: a 2-layer 1.6mm FR4 X-frame carrying a Seeed XIAO
+The PCB **is** the airframe: a 4-layer 1.6mm FR4 X-frame carrying a Seeed XIAO
 ESP32S3 Sense (flight controller + camera + WiFi), an ICM-42688-P IMU, four
 brushed-motor MOSFET stages, and a belly header for a VL53L1X time-of-flight
 altitude sensor. Person recognition/re-ID runs off-board on a laptop over WiFi;
