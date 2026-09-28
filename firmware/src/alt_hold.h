@@ -74,13 +74,27 @@ public:
     void arm(float current_height_m);
     void reset_learning();
 
-    float hover_throttle() const { return hover_; }
+    /* Feed the instantaneous pack voltage. hover_ is stored as the duty AT
+     * V_REF (3.70 V); thrust goes as (duty*V)^2, so holding thrust across the
+     * discharge needs duty scaled by V_REF/V. Without this the fixed baseline
+     * is ~12% too low on a full pack and ~short on a sagged one -- and a
+     * FAILSAFE descent late in the pack could not hover at all (AUDIT_REVD C3).
+     * Never called -> vscale_ stays 1.0 and behaviour is exactly the old one. */
+    void set_pack_voltage(float volts);
+
+    float hover_throttle() const { return hover_; }         /* at V_REF */
+    /* Voltage-corrected baseline — what hovering needs on THIS pack right
+     * now. The LANDING descent cap and the update() fallback must use this
+     * one: 80% of the reference baseline on a sagged pack is not "below
+     * hover", it is a fall. */
+    float hover_effective() const { return hover_ * vscale_; }
     float climb_rate() const { return climb_ms_; }
     bool  holding() const { return holding_; }
 
 private:
     AltHoldConfig c_;
-    float hover_;
+    float hover_;      /* duty at V_REF, NOT at the present pack voltage */
+    float vscale_ = 1.0f;
     float integral_;
     float sp_m_;          /* rate-limited, follows the commanded target */
     float prev_height_;

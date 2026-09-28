@@ -31,31 +31,48 @@ AltHoldConfig default_alt_hold_config()
     c.hover_learn_hz = 0.05f;   /* ~20s time constant */
     c.min_throttle = 0.15f;
     c.max_throttle = 0.90f;
-    /* Hover throttle, MEASURED on the airframe 2026-08-20.
+    /* Hover throttle. DERIVED, NOT MEASURED -- and this constant has now been
+     * wrong three times, so read the whole comment before changing it again.
      *
-     * Props on, board restrained, all four motors ramped in steps: the frame
-     * was straining and nearly free of the surface at 29% per motor. So hover
-     * is near 0.30.
+     * History: 0.62, then 0.79, then 0.30. None of the three was measured.
      *
-     * The previous 0.79 was never measured. It came from a T:W estimate of
-     * ~1.6 -- hover near sqrt(1/1.6) of full throttle -- and that 1.6 came in
-     * turn from the SPICE power model whose assumptions have now been
-     * contradicted twice on hardware. The real airframe is far better than
-     * that: hovering at ~30% throttle implies a thrust-to-weight nearer 3
-     * than 1.6.
+     * The 0.30 came from a props-on ramp on 2026-08-20 where the operator saw
+     * the restrained frame straining and "nearly free of the surface" at 29%
+     * per motor. Three things make that unsound as a hover measurement:
      *
-     * Getting this wrong upward is the dangerous direction. hover_ is the
-     * FEEDFORWARD -- what the loop commands before any correction -- so 0.79
-     * against a true 0.30 would open at more than double the throttle needed
-     * and take ~20 s (hover_learn_hz = 0.05) to learn back down. That is a
-     * launch, not a lift.
+     *   1. The bench ramp CANNOT COMMAND MORE THAN 35% -- benchtest.cpp clamps
+     *      g_duty to 0.35. The observation was taken a hair under the tool's
+     *      own ceiling, so it bounds hover from BELOW and nothing more. "It
+     *      almost lifted at the highest duty available" is not "hover is 29%".
+     *   2. Straining against a restraint is a subjective judgement of restraint
+     *      force, not a weight measurement. Nothing was on a scale.
+     *   3. The pack voltage quoted alongside it (3.02 V) came through the
+     *      100k/100k divider that commit 2676ce2 proved was corrupting this
+     *      board's ADC, on a board whose VBAT_SENSE joint was independently
+     *      found dead the same week.
      *
-     * Caveat on the number: it was measured on a pack sagging to 3.02 V under
-     * that load. Less voltage means less thrust per unit duty, so a CHARGED
-     * pack should hover somewhat below 0.30. 0.30 is therefore a slight
-     * overestimate -- re-measure once the pack is healthy. The learner trims
-     * from here either way; it only has to start in the right neighbourhood,
-     * and 0.30 is the right neighbourhood where 0.79 was not. */
+     * What the physics says. Thrust on a brushed motor goes as duty^2, so
+     * hover duty = sqrt(W / T_max). At the README's 66 g AUW:
+     *
+     *      T_max 140 g (nominal)  ->  hover 0.69
+     *      T_max 102 g (derated)  ->  hover 0.80
+     *
+     * and inverting, hover_ = 0.30 would require 183 g of thrust PER 8520
+     * motor, 733 g total. An 8520 coreless on a 65 mm prop makes ~35 g. The
+     * 0.30 is not off by a little; it is off by a factor of five, and the
+     * README's own "hover sits near 60-65% throttle" agrees with the physics.
+     *
+     * So: 0.69, the LOW end of the physically defensible band. Low is the safe
+     * direction to be wrong. Too little feedforward and the aircraft simply
+     * does not leave the ground while the integrator makes up the difference;
+     * too much and the loop opens above hover and climbs -- and the learner
+     * cannot climb back down quickly (hover_learn_hz = 0.05, ~20 s). 0.69 also
+     * sits within learner range of BOTH ends of the band, which 0.30 did not.
+     *
+     * THIS NUMBER STILL NEEDS MEASURING, and it is an afternoon's work:
+     * restrain the airframe inverted over a kitchen scale, run the four-motor
+     * ramp, and record grams against duty against pack voltage. Until someone
+     * does that, treat altitude hold as unproven. */
     return c;
 }
 
@@ -70,7 +87,7 @@ float pursuit_clamp_alt_setpoint(float requested_m, bool baro_present,
 
 AltitudeHold::AltitudeHold()
     : c_(default_alt_hold_config()),
-      hover_(0.30f), integral_(0.0f), sp_m_(0.0f),
+      hover_(0.69f), integral_(0.0f), sp_m_(0.0f),
       prev_height_(0.0f), climb_ms_(0.0f), primed_(false), holding_(false)
 {
 }
@@ -96,7 +113,18 @@ void AltitudeHold::arm(float current_height_m)
 
 void AltitudeHold::reset_learning()
 {
-    hover_ = 0.30f;
+    hover_ = 0.69f;
+}
+
+void AltitudeHold::set_pack_voltage(float volts)
+{
+    /* 3.0..4.35 V is the plausible 1S window; anything else (0 at boot, a
+     * broken divider, NaN) leaves compensation OFF rather than trusting it. */
+    if (std::isfinite(volts) && volts > 3.0f && volts < 4.35f) {
+        vscale_ = clampf(3.70f / volts, 0.85f, 1.25f);
+    } else {
+        vscale_ = 1.0f;
+    }
 }
 
 float AltitudeHold::update(float target_m, float height_m, bool have_height,
@@ -140,8 +168,13 @@ float AltitudeHold::update(float target_m, float height_m, bool have_height,
     const float p = c_.kp * error;
     const float d = -c_.kd * climb_ms_;   /* oppose motion, not error change */
 
+    /* hover_ is the duty at V_REF; hover_eff is what THIS pack voltage
+     * needs for the same thrust. */
+    const float hover_eff = clampf(hover_ * vscale_,
+                                   c_.min_throttle, c_.max_throttle);
+
     const float candidate = integral_ + c_.ki * error * dt_s;
-    const float unsat = hover_ + p + candidate + d;
+    const float unsat = hover_eff + p + candidate + d;
     const bool pushing_further =
         (unsat > c_.max_throttle && error > 0.0f) ||
         (unsat < c_.min_throttle && error < 0.0f);
@@ -149,7 +182,7 @@ float AltitudeHold::update(float target_m, float height_m, bool have_height,
         integral_ = clampf(candidate, -c_.i_limit, c_.i_limit);
     }
 
-    const float out = clampf(hover_ + p + integral_ + d,
+    const float out = clampf(hover_eff + p + integral_ + d,
                              c_.min_throttle, c_.max_throttle);
 
     /* --- learn hover -----------------------------------------------------
@@ -161,7 +194,10 @@ float AltitudeHold::update(float target_m, float height_m, bool have_height,
     holding_ = fabsf(error) < LEARN_ERR_M && fabsf(climb_ms_) < LEARN_RATE_MS;
     if (holding_) {
         const float a = clampf(c_.hover_learn_hz * dt_s, 0.0f, 0.2f);
-        hover_ += a * (out - hover_);
+        /* Normalise the observed steady output back to V_REF before learning,
+         * or a hover learned on a full pack is wrong on a sagged one -- the
+         * exact drift this compensation exists to remove. */
+        hover_ += a * (out / vscale_ - hover_);
         hover_ = clampf(hover_, c_.min_throttle, c_.max_throttle);
         integral_ *= (1.0f - a);
     }

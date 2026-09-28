@@ -20,6 +20,7 @@
  */
 #include <Arduino.h>
 #include <WiFi.h>
+#include <esp_task_wdt.h>
 #include <WiFiUdp.h>
 
 #include "alt_hold.h"
@@ -599,12 +600,23 @@ void setup(void)
                        "===========");
     }
     bench_print_help();
+
+    /* Hardware watchdog, armed LAST in setup so slow init (WiFi join) cannot
+     * trip it. 500 ms is 500 missed cycles of a 1 kHz loop -- nothing
+     * legitimate stalls that long, but a wedged I2C transaction with motors
+     * at their last commanded duty would (AUDIT_REVD C4). panic=true resets
+     * the chip; motors drop to Hi-Z through the drivers' input pulldowns and
+     * the boot-time idle state, which beats full throttle into the floor.
+     * Arduino-ESP32 core 2.x API (espressif32 platform, see platformio.ini). */
+    esp_task_wdt_init(1, true);          /* 1 s: the API's floor granularity */
+    esp_task_wdt_add(NULL);
 }
 
 /* ------------------------------------------------------------------- loop */
 
 void loop(void)
 {
+    esp_task_wdt_reset();
     static uint32_t last_loop_us = micros();
     static uint32_t last_batt_ms = 0;
     static uint32_t last_tof_ms = 0;
@@ -775,8 +787,9 @@ void loop(void)
             const float target_m = pursuit_clamp_alt_setpoint(
                 sp.alt_sp_m, g_baro.present(),
                 ALT_CEILING_TOF_M, ALT_CEILING_BARO_M);
+            g_alt.set_pack_voltage(g_batt.instant_volts());
             throttle = g_alt.update(target_m, g_height_m, height_fresh,
-                                    g_alt.hover_throttle(), dt_s);
+                                    g_alt.hover_effective(), dt_s);
         } else {
             throttle = sp.alt_sp_m;   /* the field carries throttle directly */
         }
@@ -785,7 +798,7 @@ void loop(void)
             /* Descend under control rather than cutting: a dropped aircraft
              * breaks props and, on this airframe, the camera flex. Below the
              * hover baseline it sinks; not so far below that it falls. */
-            throttle = fminf(throttle, g_alt.hover_throttle() * 0.80f);
+            throttle = fminf(throttle, g_alt.hover_effective() * 0.80f);
         }
 
         /* ARMED is authorised-not-flying: hold idle until FLYING, so a

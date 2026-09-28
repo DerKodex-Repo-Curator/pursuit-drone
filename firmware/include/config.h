@@ -46,8 +46,13 @@
 #define I2C_FREQ_HZ    400000
 
 /* ---- battery ------------------------------------------------------------
- * 100k/100k divider, so the ADC sees half the pack voltage. GPIO3 is ADC1_CH2
+ * Divider is 1:1, so the ADC sees half the pack voltage. GPIO3 is ADC1_CH2
  * and also a strap pin — high-Z at reset is fine, which is why it was chosen.
+ *
+ * REV B changed the resistors 100k/100k -> 10k/10k. VBAT_DIVIDER is unchanged
+ * at 2.0 because the RATIO is unchanged; what changed is the source impedance
+ * the ADC sees, 50 kOhm -> 5 kOhm. See VBAT_SANE_MIN_V below for why that
+ * mattered. This firmware runs correctly on both boards.
  */
 #define PIN_VBAT_SENSE 3   /* D2 */
 #define VBAT_DIVIDER   2.0f
@@ -182,6 +187,11 @@
  * sample-and-hold wants well under 10 kOhm; it barely settles when quiet, and
  * 32 kHz motor switching nearby finishes it off. The divider was sized for
  * low idle draw and paid for it in measurement integrity.
+ *
+ * FIXED IN HARDWARE ON REV B: 10k/10k, a 5 kOhm source, inside what the S3's
+ * sample-and-hold needs. The rejection below is KEPT anyway — it costs one
+ * comparison, it is the only thing standing between a corrupted sample and a
+ * throttle clamp, and this firmware still has to run on a rev A board.
  *
  * 2.50 V, not 3.00: a genuinely collapsing pack must still be visible. This
  * rejects the impossible, not the alarming. Anything above it is believed. */

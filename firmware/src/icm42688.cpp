@@ -1,4 +1,5 @@
 #include "icm42688.h"
+#include <cstdio>
 
 #ifndef PURSUIT_HOST_BUILD
 
@@ -214,7 +215,14 @@ bool Icm42688::calibrate_gyro(uint32_t samples)
     const float MOVE_LIMIT_DPS = 5.0f;
     if (peak[0] > MOVE_LIMIT_DPS || peak[1] > MOVE_LIMIT_DPS ||
         peak[2] > MOVE_LIMIT_DPS) {
-        err_ = "calib: board moved — put it down and reset";
+        /* Report the peaks, not just the verdict: 6 dps is a desk being
+         * typed on, 60 dps is someone holding the aircraft, and the fix is
+         * different for each. A bare "it moved" leaves you guessing. */
+        static char msg[96];
+        snprintf(msg, sizeof(msg),
+                 "calib: board moved (peak %.1f/%.1f/%.1f dps, limit %.0f)",
+                 peak[0], peak[1], peak[2], MOVE_LIMIT_DPS);
+        err_ = msg;
         return false;
     }
 

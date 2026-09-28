@@ -3,6 +3,7 @@
 #ifndef PURSUIT_HOST_BUILD
 
 #include <Arduino.h>
+#include <Wire.h>
 #include <cmath>
 
 #include "battery.h"
@@ -29,6 +30,24 @@ enum class Mode { Off, Motor, MotorAll, Orientation, Sensors };
 Mode g_mode = Mode::Off;
 int  g_motor = -1;              /* which motor is spinning, 0-3   */
 float g_duty = 0.12f;           /* low enough not to walk the board */
+
+/* Duty ceiling for the '+' key. 0.35 is the safe default: enough to prove a
+ * motor spins and to load the pack, not enough to lift a restrained board.
+ *
+ * But it is ALSO why this project still does not know its own hover throttle.
+ * The physics says hover is near 0.69 (sqrt of 66g AUW over 140g thrust), and
+ * the one props-on observation -- "nearly free of the surface at 29%" -- was
+ * taken a hair under this very ceiling, so it bounded hover from below and
+ * nothing more. That reading was then written into alt_hold.cpp as if it were
+ * hover, and it took a physics check to catch: 0.30 implies 183g of thrust per
+ * 8520 motor, five times what one makes.
+ *
+ * So the ceiling lifts, but only deliberately. THRUST_UNLOCK_KEY has to be
+ * pressed first, it prints what it is about to allow, and any '-' below the
+ * safe ceiling re-arms the lock. */
+constexpr float DUTY_CEIL_SAFE   = 0.35f;
+constexpr float DUTY_CEIL_THRUST = 0.85f;
+bool  g_thrust_unlocked = false;
 uint32_t g_until_ms = 0;
 uint32_t g_last_print = 0;
 
@@ -249,6 +268,79 @@ void gate_pin_test(void)
     Serial.println("\n    done — LEDC restored, motors stopped\n");
 }
 
+/* Probe the I2C lines directly, without the Wire driver.
+ *
+ * Added 2026-08-21. The IMU has been failing 100% of reads with who_am_i 0x00,
+ * and the question is WHY: no power, a line shorted to ground, or a dead chip.
+ * Wire cannot tell those apart -- every one of them just returns an error.
+ *
+ * With the internal pull-up enabled and nothing driving, an idle I2C line must
+ * read HIGH. A line that reads LOW is being held down: shorted to ground, or a
+ * device on the bus clamping it. That distinction is the whole diagnosis, and
+ * it needs no multimeter.
+ *
+ * Restores the Wire configuration afterwards. */
+void i2c_line_test(void)
+{
+    Serial.println("\n>>> I2C LINE TEST");
+    Serial.println("    idle lines with a pull-up must read HIGH.");
+    Serial.println("    LOW = held down (shorted, or a device clamping it)\n");
+
+    Wire.end();
+    delay(50);
+
+    const int pins[2] = {PIN_SDA, PIN_SCL};
+    const char *names[2] = {"SDA (D4)", "SCL (D5)"};
+
+    /* The board carries external pull-ups from SDA and SCL to +3V3
+     * (design.py R-pair). So a plain INPUT -- internal pull-up OFF -- reads
+     * HIGH only if those resistors have a live 3V3 above them. That turns the
+     * bus into a rail probe: both LOW here means the IMU has no supply, and no
+     * amount of I2C work will help until that is fixed. */
+    Serial.println("    rail probe (internal pull-up OFF):");
+    for (int i = 0; i < 2; i++) {
+        pinMode(pins[i], INPUT);
+        delay(20);
+        Serial.printf("      %-10s %s\n", names[i],
+                      digitalRead(pins[i]) ? "HIGH  <- 3V3 is present"
+                                           : "LOW   <- no 3V3 on the board");
+    }
+    Serial.println("");
+
+    for (int i = 0; i < 2; i++) {
+        pinMode(pins[i], INPUT_PULLUP);
+        delay(20);
+        const int idle = digitalRead(pins[i]);
+
+        /* OUTPUT_OPEN_DRAIN, not OUTPUT: reading back a plain OUTPUT pin on
+         * the ESP32 can return the output register rather than the pad, which
+         * makes the result meaningless. Open-drain keeps the input buffer
+         * enabled, so digitalRead reports the ACTUAL line level -- and it is
+         * how I2C drives the bus anyway. */
+        pinMode(pins[i], OUTPUT_OPEN_DRAIN);
+        digitalWrite(pins[i], LOW);
+        delay(5);
+        const int driven = digitalRead(pins[i]);
+        pinMode(pins[i], INPUT_PULLUP);
+        delay(20);
+        const int released = digitalRead(pins[i]);
+
+        Serial.printf("    %-10s idle %s   driven-low %s   released %s  %s\n",
+                      names[i],
+                      idle ? "HIGH" : "LOW ",
+                      driven ? "HIGH" : "LOW ",
+                      released ? "HIGH" : "LOW ",
+                      idle ? "ok" : "<-- HELD LOW");
+    }
+
+    Serial.println("\n    both HIGH when idle -> lines are free; suspect the");
+    Serial.println("    IMU itself or its supply. Either LOW -> that line is");
+    Serial.println("    shorted, and no I2C device can work until it is fixed.\n");
+
+    Wire.begin(PIN_SDA, PIN_SCL, I2C_FREQ_HZ);
+    Wire.setTimeOut(5);
+}
+
 void bench_print_help(void)
 {
     Serial.println("\n=================== BENCH TEST — PROPS OFF ==========="
@@ -264,10 +356,15 @@ void bench_print_help(void)
                    "<-> bench (bright)");
     Serial.println(" v         video: close (SVGA, face ID) <-> range (VGA, "
                    "35% less bitrate)");
-    Serial.println(" +  -      motor test duty up / down");
+    Serial.println(" +  -      motor test duty up / down (ceiling 35%)");
+    Serial.println(" T         unlock the THRUST SWEEP to 85% — props on, "
+                   "airframe BOLTED DOWN,");
+    Serial.println("           over a kitchen scale. This is how hover "
+                   "throttle gets measured.");
     Serial.println(" d         dump the flight log as CSV over USB");
     Serial.println(" p         loop section profile (which part is slow)");
     Serial.println(" g         drive each motor gate pin HIGH (meter it)");
+    Serial.println(" b         probe the I2C lines (SDA/SCL stuck low?)");
     Serial.println(" x         stop everything");
     Serial.println(" h         this help");
     Serial.println("");
@@ -306,6 +403,37 @@ bool bench_key(char c, const BenchDeps &d)
         return true;
     case 'A':
         run_all();
+        return true;
+    case 'T':
+        /* The measurement this whole project has been guessing at. Hover
+         * throttle is the ONE number that decides whether altitude hold can
+         * work, and three different values (0.62, 0.79, 0.30) have now been
+         * written into the firmware without anyone putting the aircraft on a
+         * scale. This unlocks the duty range needed to actually find it. */
+        g_thrust_unlocked = !g_thrust_unlocked;
+        if (!g_thrust_unlocked) {
+            g_duty = fminf(g_duty, DUTY_CEIL_SAFE);
+            Serial.println("\nthrust sweep LOCKED, duty back under 35%");
+            return true;
+        }
+        Serial.println("\n>>> THRUST SWEEP UNLOCKED — duty ceiling now 85%");
+        Serial.println("    PROPS ON for this one. Everything else about it "
+                       "is dangerous:");
+        Serial.println("    - BOLT OR CLAMP the airframe down. At 85% it will "
+                       "lift itself and");
+        Serial.println("      anything it is only taped to. Zip ties through "
+                       "the strap holes.");
+        Serial.println("    - Point it at nothing you mind losing. Eye "
+                       "protection.");
+        Serial.println("    - Method: invert the airframe over a kitchen "
+                       "scale, tare it, then");
+        Serial.println("      + to step duty and 'A' to run. Record GRAMS at "
+                       "each step.");
+        Serial.println("    - Hover duty is where grams = the aircraft's own "
+                       "weight. Write it");
+        Serial.println("      into hover_ in alt_hold.cpp. Physics says "
+                       "expect ~0.69.");
+        Serial.println("    - '-' back under 35% re-locks this.\n");
         return true;
     case 'o':
         g_mode = Mode::Orientation;
@@ -359,11 +487,21 @@ bool bench_key(char c, const BenchDeps &d)
         return true;
     }
     case '+':
-        g_duty = fminf(g_duty + 0.03f, 0.35f);
-        Serial.printf("motor test duty %.0f%%\n", g_duty * 100.0f);
+        g_duty = fminf(g_duty + 0.03f,
+                       g_thrust_unlocked ? DUTY_CEIL_THRUST : DUTY_CEIL_SAFE);
+        Serial.printf("motor test duty %.0f%%%s\n", g_duty * 100.0f,
+                      g_thrust_unlocked ? "   [THRUST SWEEP UNLOCKED]" : "");
+        if (!g_thrust_unlocked && g_duty >= DUTY_CEIL_SAFE - 1e-4f)
+            Serial.println("    ceiling. press T to unlock the thrust sweep "
+                           "(read the warning first)");
         return true;
     case '-':
         g_duty = fmaxf(g_duty - 0.03f, 0.05f);
+        if (g_duty <= DUTY_CEIL_SAFE && g_thrust_unlocked) {
+            g_thrust_unlocked = false;
+            Serial.println("thrust sweep re-locked (back under the safe "
+                           "ceiling)");
+        }
         Serial.printf("motor test duty %.0f%%\n", g_duty * 100.0f);
         return true;
     case 'x':
@@ -380,6 +518,9 @@ bool bench_key(char c, const BenchDeps &d)
         return true;
     case 'g':
         gate_pin_test();
+        return true;
+    case 'b':
+        i2c_line_test();
         return true;
     case 'h':
         bench_print_help();

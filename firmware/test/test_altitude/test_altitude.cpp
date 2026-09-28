@@ -16,6 +16,59 @@
 static const float DT = 1.0f / 30.0f;   /* the rangefinder's rate */
 static const float MAX_TILT = 35.0f;
 
+
+/* --------------------------------------------- pack-voltage compensation */
+
+/* Hold station at zero error so the output IS the hover baseline, and read
+ * what different pack voltages do to it. Thrust goes as (duty*V)^2: a full
+ * pack needs LESS duty than reference, a sagged one MORE. Before this
+ * existed the baseline was a constant, so a FAILSAFE descent late in the
+ * pack commanded a duty that could not hover (AUDIT_REVD.md C3). */
+static float steady_output_at(float volts)
+{
+    AltitudeHold ah;
+    ah.arm(1.0f);
+    if (volts > 0.0f) ah.set_pack_voltage(volts);
+    float out = 0.0f;
+    for (int i = 0; i < 5; i++)
+        out = ah.update(1.0f, 1.0f, true, 0.5f, DT);
+    return out;
+}
+
+void test_sagged_pack_commands_more_duty_than_full(void)
+{
+    const float full   = steady_output_at(4.20f);
+    const float ref    = steady_output_at(3.70f);
+    const float sagged = steady_output_at(3.30f);
+    TEST_ASSERT_TRUE(full < ref);
+    TEST_ASSERT_TRUE(ref < sagged);
+    /* And the scale is the physics, not a fudge: V_REF/V within clamps. */
+    TEST_ASSERT_FLOAT_WITHIN(0.02f, 0.69f * (3.70f / 4.20f), full);
+    TEST_ASSERT_FLOAT_WITHIN(0.02f, 0.69f * (3.70f / 3.30f), sagged);
+}
+
+void test_implausible_voltage_disables_compensation(void)
+{
+    const float base = steady_output_at(0.0f);       /* never fed */
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, base, steady_output_at(0.0f + 1e-6f)); /* 0V: off */
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, base, steady_output_at(9.0f));         /* junk: off */
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, base, steady_output_at(NAN));          /* NaN: off */
+}
+
+void test_learner_stores_the_reference_voltage_baseline(void)
+{
+    /* Learn while hovering on a SAGGED pack, then ask for the baseline. If
+     * the learner stored the compensated duty instead of normalising it
+     * back to V_REF, the reference baseline would creep upward and a later
+     * full-pack flight would hover too high. */
+    AltitudeHold ah;
+    ah.arm(1.0f);
+    ah.set_pack_voltage(3.30f);
+    for (int i = 0; i < 3000; i++)
+        ah.update(1.0f, 1.0f, true, 0.5f, DT);       /* 100 s of clean hover */
+    TEST_ASSERT_FLOAT_WITHIN(0.03f, 0.69f, ah.hover_throttle());
+}
+
 /* ------------------------------------------------------- tilt correction */
 
 void test_level_reads_through_unchanged(void)
@@ -77,11 +130,10 @@ void test_bad_input_is_rejected(void)
 struct Airframe {
     float height = 0.0f;
     float vel = 0.0f;
-    /* MEASURED 2026-08-20: props on, restrained, the frame was straining and
-     * nearly free of the surface at 29% per motor. The old 0.60/0.72 values
-     * here were chosen to sit near a hover_ of 0.79 that was itself never
-     * measured -- they modelled an airframe that does not exist. */
-    float true_hover = 0.30f;
+    /* Matches the DERIVED baseline in alt_hold.cpp: sqrt(66 g / 140 g) using
+     * the README's own mass and thrust figures. The 0.30 that briefly lived
+     * here modelled an airframe making 733 g of thrust from four 8520s. */
+    float true_hover = 0.69f;
 
     void step(float throttle, float dt) {
         const float accel = (throttle - true_hover) * 22.0f - vel * 1.6f;
@@ -116,7 +168,7 @@ void test_hover_throttle_is_learned(void)
     /* An airframe a little heavier than the baseline assumes. Close enough
      * that the loop can hold station, which is the ONLY condition under which
      * learning runs -- see the deadlock test below. */
-    af.true_hover = 0.38f;
+    af.true_hover = 0.77f;
     af.height = 1.0f;
     alt.arm(af.height);
 
@@ -124,14 +176,16 @@ void test_hover_throttle_is_learned(void)
         const float t = alt.update(1.0f, af.height, true, 0.3f, DT);
         af.step(t, DT);
     }
-    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.08f, 0.38f, alt.hover_throttle(),
+    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.08f, 0.77f, alt.hover_throttle(),
         "hover throttle did not converge on the airframe's actual value");
 }
 
 void test_a_badly_wrong_baseline_is_NOT_rescued_by_the_learner(void)
 {
-    /* Documents a real limitation, discovered 2026-08-20 when correcting
-     * hover_ from an unmeasured 0.79 to a measured 0.30.
+    /* Documents a real limitation. Note it cuts BOTH ways: this test used to
+     * probe an airframe far ABOVE the baseline, but the same deadlock traps an
+     * airframe far BELOW it, which is exactly the hole a hover_ of 0.30 would
+     * have dropped a 0.69 airframe into.
      *
      * Learning is gated on holding_ -- small error AND small climb rate. An
      * airframe whose true hover is far from the baseline never settles, so
@@ -144,7 +198,7 @@ void test_a_badly_wrong_baseline_is_NOT_rescued_by_the_learner(void)
      */
     AltitudeHold alt;
     Airframe af;
-    af.true_hover = 0.75f;        /* far above the 0.30 baseline */
+    af.true_hover = 0.25f;        /* far BELOW the 0.69 baseline */
     af.height = 1.0f;
     alt.arm(af.height);
 
@@ -155,7 +209,7 @@ void test_a_badly_wrong_baseline_is_NOT_rescued_by_the_learner(void)
     /* It gets nowhere near. Asserting the FAILURE so that if someone later
      * makes the learner able to cross this gap, this test fails loudly and
      * the comment above gets revisited rather than silently going stale. */
-    TEST_ASSERT_TRUE_MESSAGE(alt.hover_throttle() < 0.45f,
+    TEST_ASSERT_TRUE_MESSAGE(alt.hover_throttle() > 0.50f,
         "learner unexpectedly crossed a large hover gap -- re-check the "
         "claim that hover_ must start close");
 }
@@ -322,6 +376,9 @@ int main(int, char **)
     RUN_TEST(test_bad_input_is_rejected);
 
     RUN_TEST(test_holds_a_commanded_height);
+    RUN_TEST(test_sagged_pack_commands_more_duty_than_full);
+    RUN_TEST(test_implausible_voltage_disables_compensation);
+    RUN_TEST(test_learner_stores_the_reference_voltage_baseline);
     RUN_TEST(test_hover_throttle_is_learned);
     RUN_TEST(test_a_badly_wrong_baseline_is_NOT_rescued_by_the_learner);
     RUN_TEST(test_climb_does_not_corrupt_the_learned_hover);
