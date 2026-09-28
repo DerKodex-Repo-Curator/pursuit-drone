@@ -15,6 +15,7 @@
 # display, and the GUI build pulls in a long tail of X11 libraries to support
 # a window it will never open.
 numpy==2.5.1
+scipy==1.18.0
 opencv-python-headless==5.0.0.93
 onnxruntime==1.28.0
 PyYAML==6.0.3

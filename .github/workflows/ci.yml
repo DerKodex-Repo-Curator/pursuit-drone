@@ -31,7 +31,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install numpy opencv-python-headless onnxruntime pytest PyYAML matplotlib
+          pip install numpy scipy opencv-python-headless onnxruntime pytest PyYAML matplotlib
 
       - name: Tests
         # No models and no camera on a CI runner. The suite is built so the
@@ -101,6 +101,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install
+        # gen_protocol_header.py imports the pursuit package, whose __init__
+        # pulls in the whole pipeline, so it needs the vision dependencies.
+        run: pip install numpy scipy opencv-python-headless onnxruntime PyYAML
       - name: Regenerate and diff
         # firmware/include/pursuit_link.h is GENERATED from
         # vision/pursuit/protocol.py so the two ends of the link cannot drift.
