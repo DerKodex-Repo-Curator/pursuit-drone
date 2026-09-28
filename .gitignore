@@ -77,3 +77,15 @@ ml/runs/*.pt
 # SKiDL hook artefacts — the plugin drops these wherever it is invoked
 skidl_REPL.erc
 skidl_REPL.log
+
+# ------------------------------------------------------- local-only files --
+# Coding-assistant configuration, the SKiDL plugin's pipeline state, and the
+# LinkedIn carousel (social media, not engineering). Kept locally.
+.claude/
+AGENTS.md
+pipeline_state.json
+docs/media/linkedin/
+docs/media/linkedin_figma/
+vision/tools/make_deck.py
+*.moved_aside
+*.linked_*_moved_aside
