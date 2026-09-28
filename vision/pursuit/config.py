@@ -283,6 +283,23 @@ class ControlConfig:
     standoff_m: float = 3.0
     use_metric_standoff: bool = True
 
+    # --- identity re-verification ----------------------------------------
+    # The face embedder works to ~2.4m; the follow standoff is 3.0m. So a
+    # lock held at standoff is sustained by the BODY model alone, and the
+    # identity-theft check in lock.py needs a READABLE face to fire — at
+    # standoff it cannot. Left alone, an ID drift onto a similar-looking
+    # person would persist forever (lock.py's own comment says so). The
+    # schedule: after `reverify_after_s` of body-only confirmations, close to
+    # `reverify_standoff_m` (inside face range), hold until a face confirm
+    # resets the clock, and if no face appears within `reverify_give_up_s`,
+    # back off anyway — hovering ever-closer at someone who will not show
+    # their face is worse than an unverified follow. Disabled => exactly the
+    # old behaviour.
+    reverify_enabled: bool = True
+    reverify_after_s: float = 12.0
+    reverify_standoff_m: float = 2.0
+    reverify_give_up_s: float = 8.0
+
     # --- lead compensation --------------------------------------------------
     # Aim where the subject WILL be, not where they were. End-to-end latency is
     # vision (~40-70ms) + WiFi + the control loop; at 1.5 m/s and 3 m range a

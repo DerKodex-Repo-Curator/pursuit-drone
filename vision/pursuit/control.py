@@ -146,6 +146,11 @@ class FollowController:
         self._searching = False
         self._search_started = 0.0
         self._search_dir = 0.0
+        # identity re-verification (see ControlConfig.reverify_*)
+        self._face_age_s = 0.0
+        self._reverify_for_s = 0.0
+        self.reverifying = False
+        self.standoff_used_m = cfg.standoff_m
         self._ever_locked = False
         # Overrides cfg.lead_time_s once the link has measured a real
         # round-trip. The configured value is only ever a starting guess.
@@ -311,12 +316,39 @@ class FollowController:
         e_yaw = (cx - half_w) / max(half_w, 1.0)
         e_vert = (cy - aim_y) / max(half_h, 1.0)
 
+        # --- identity re-verification schedule -------------------------------
+        # `source` is per-frame truth from the lock: "face" only on a frame the
+        # face embedder actually confirmed. Age is integrated in loop-dt, not
+        # wall-clock, so tests and replays are deterministic.
+        if lock.source == "face":
+            self._face_age_s = 0.0
+            self._reverify_for_s = 0.0
+            self.reverifying = False
+        elif lock.commanding:
+            self._face_age_s += dt
+        can_reverify = (cfg.reverify_enabled and cfg.use_metric_standoff
+                        and bool(self.subject_height_m))
+        if can_reverify and not self.reverifying \
+                and self._face_age_s > cfg.reverify_after_s:
+            self.reverifying = True
+            self._reverify_for_s = 0.0
+        if self.reverifying:
+            self._reverify_for_s += dt
+            if self._reverify_for_s > cfg.reverify_give_up_s:
+                # No face after closing in: stand back off and restart the
+                # clock rather than pressing ever closer at someone who will
+                # not show their face.
+                self.reverifying = False
+                self._face_age_s = 0.0
+        self.standoff_used_m = (cfg.reverify_standoff_m if self.reverifying
+                                else cfg.standoff_m)
+
         # Height is the distance cue — not width or area, because height barely
         # changes when the subject turns sideways while width nearly halves.
         # With a known subject height it becomes a real range in metres.
         if cfg.use_metric_standoff and self.subject_height_m:
             self.range_m = (self.subject_height_m * focal) / box_h
-            want_h = height_px_for_distance(cfg.standoff_m,
+            want_h = height_px_for_distance(self.standoff_used_m,
                                             self.subject_height_m, focal)
             e_dist = (want_h - box_h) / max(want_h, 1.0)
         else:

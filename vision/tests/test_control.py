@@ -513,3 +513,83 @@ def test_every_emitted_command_is_transmittable():
         for dt in (1e-9, 1 / 30, 10.0):
             cmd = ctl.update(lock, W, H, dt)
             cmd.pack()                              # raises if non-finite
+
+
+# ------------------------------------------------------- identity re-verify --
+
+def _reverify_ctl(**over):
+    cfg = ControlConfig(**over)
+    ctl = FollowController(cfg)
+    ctl.subject_height_m = 1.75          # metric standoff needs enrolment height
+    return cfg, ctl
+
+
+def _lock_at(cx, cy, source, h_frac=0.45, aspect=0.4):
+    """box_at() with a choosable source — its own is hard-coded to face."""
+    bh = h_frac * H
+    bw = bh * aspect
+    return locked(cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2,
+                  source=source)
+
+
+def _run(ctl, lock, seconds, dt=1 / 30):
+    cmd = None
+    for _ in range(int(seconds / dt)):
+        cmd = ctl.update(lock, W, H, dt)
+    return cmd
+
+
+def test_body_only_lock_closes_in_to_reverify_the_face():
+    """Face works to ~2.4m, standoff is 3.0m: held at standoff the lock is
+    body-only and an ID drift can never be caught. After long enough on the
+    body model alone the controller must shrink the standoff into face range."""
+    cfg, ctl = _reverify_ctl()
+    _run(ctl, _lock_at(W / 2, H / 2, "face"), 1.0)
+    assert not ctl.reverifying
+    _run(ctl, _lock_at(W / 2, H / 2, "body"),
+         cfg.reverify_after_s + 1.0)
+    assert ctl.reverifying
+    assert ctl.standoff_used_m == pytest.approx(cfg.reverify_standoff_m)
+
+
+def test_a_fresh_face_confirmation_ends_the_excursion():
+    cfg, ctl = _reverify_ctl()
+    _run(ctl, _lock_at(W / 2, H / 2, "body"),
+         cfg.reverify_after_s + 1.0)
+    assert ctl.reverifying
+    ctl.update(_lock_at(W / 2, H / 2, "face"), W, H, 1 / 30)
+    assert not ctl.reverifying
+    assert ctl.standoff_used_m == pytest.approx(cfg.standoff_m)
+
+
+def test_reverify_gives_up_rather_than_pressing_closer_forever():
+    """If the face never becomes readable (turned away, masked), backing off
+    beats hovering at 2m indefinitely — and the clock restarts, so the next
+    attempt happens rather than never."""
+    cfg, ctl = _reverify_ctl()
+    body = _lock_at(W / 2, H / 2, "body")
+    _run(ctl, body, cfg.reverify_after_s + 1.0)
+    assert ctl.reverifying
+    _run(ctl, body, cfg.reverify_give_up_s + 1.0)
+    assert not ctl.reverifying
+    assert ctl.standoff_used_m == pytest.approx(cfg.standoff_m)
+    # ...and the cycle re-arms rather than staying given-up forever
+    _run(ctl, body, cfg.reverify_after_s + 1.0)
+    assert ctl.reverifying
+
+
+def test_reverify_disabled_is_exactly_the_old_behaviour():
+    cfg, ctl = _reverify_ctl(reverify_enabled=False)
+    _run(ctl, _lock_at(W / 2, H / 2, "body"), 60.0)
+    assert not ctl.reverifying
+    assert ctl.standoff_used_m == pytest.approx(cfg.standoff_m)
+
+
+def test_coasting_does_not_age_the_face_clock():
+    """Prediction frames carry no identity evidence either way; only body-
+    confirmed COMMANDING frames should advance the clock, or a long coast
+    would trigger a close approach at whoever gets re-acquired."""
+    cfg, ctl = _reverify_ctl()
+    coast = LockResult(LockState.COASTING, commanding=False)
+    _run(ctl, coast, cfg.reverify_after_s + 2.0)
+    assert not ctl.reverifying
